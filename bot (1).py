@@ -24,6 +24,10 @@ GIFT_SENDER_USERNAME = "bogkm"  # без @, поставь свой юзерне
 # Минимальный интервал между победами в одном чате (в секундах), чтобы не было выигрышей подряд
 COOLDOWN_SECONDS = 60
 
+# Путь к картинке, которая отправляется вместе с сообщением о победе
+# (файл должен лежать рядом с bot.py, в папке assets)
+WIN_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "assets", "winner.png")
+
 # Не засчитывать сообщения от ботов и команды (/start и т.п.)
 # =====================================
 
@@ -73,12 +77,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"✅ Подарок отправлен."
     )
 
-    await context.bot.send_message(
-        chat_id=chat.id,
-        text=text,
-        parse_mode="HTML",
-        reply_to_message_id=message.message_id,
-    )
+    if os.path.exists(WIN_IMAGE_PATH):
+        with open(WIN_IMAGE_PATH, "rb") as photo:
+            await context.bot.send_photo(
+                chat_id=chat.id,
+                photo=photo,
+                caption=text,
+                parse_mode="HTML",
+                reply_to_message_id=message.message_id,
+            )
+    else:
+        # если картинки нет — просто отправляем текст, чтобы бот не падал
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=text,
+            parse_mode="HTML",
+            reply_to_message_id=message.message_id,
+        )
     logger.info(f"Win! chat={chat.id} user={user.id} gift={gift_name}")
 
 
