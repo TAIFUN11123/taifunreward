@@ -23,7 +23,7 @@ BOT_TOKEN = os.environ.get(
 # Шанс выигрыша на каждое сообщение
 # 1.0 = 100%
 # 0.001 = 0.1%
-WIN_CHANCE = 1.0
+WIN_CHANCE = 0.005
 
 # Подарки
 GIFTS = [
