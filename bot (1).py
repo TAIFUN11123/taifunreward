@@ -11,7 +11,8 @@ from telegram.ext import Application, MessageHandler, CommandHandler, ContextTyp
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "ВСТАВЬ_СЮДА_ТОКЕН_ОТ_BOTFATHER")
 
 # Шанс выигрыша на каждое сообщение (0.001 = 0.1%, очень редко)
-WIN_CHANCE = 0.001
+# ВРЕМЕННО 1.0 (100%) для теста — потом верни маленькое значение типа 0.001
+WIN_CHANCE = 1.0
 
 # Список подарков, которые может выдать бот (название + эмодзи)
 GIFTS = [
@@ -98,11 +99,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "Привет! Я бот-розыгрыш подарков.\n"
-        "Добавь меня в чат как админа, и я буду случайно выбирать людей "
-        "по их сообщениям и объявлять победителей 🎁"
-    )
+    await update.message.reply_text("канал-@taifun_official")
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
