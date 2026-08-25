@@ -2,6 +2,7 @@ import logging
 import html
 import asyncio
 import os
+import math
 
 from datetime import datetime, timedelta
 
@@ -146,7 +147,7 @@ def time_left() -> int:
     if not raffle["ends_at"]:
         return 0
 
-    seconds = int(
+    seconds = math.ceil(
         (
             raffle["ends_at"]
             - datetime.now()
@@ -654,6 +655,11 @@ async def raffle_message(
     if time_left() <= 0:
         return
 
+    # Если пишет уже текущий лидер — ничего не делаем,
+    # таймер и лидер не обновляются
+    if raffle["leader_id"] == user.id:
+        return
+
     # =====================================================
     # НОВЫЙ ЛИДЕР
     # =====================================================
@@ -675,20 +681,24 @@ async def raffle_message(
     # СООБЩЕНИЕ О ЛИДЕРЕ
     # =====================================================
 
+    LEADER_EMOJI = (
+        '<tg-emoji emoji-id="5350356823528455446">✨</tg-emoji>'
+    )
+
     if previous_leader is None:
 
         text = (
-            "👑 <b>Новый лидер!</b>\n\n"
-            f"{mention}\n\n"
-            f"⏱ {minutes}:{seconds:02d}"
+            f"{LEADER_EMOJI} <b>Новый лидер!</b>\n\n"
+            f"Новый лидер: {mention}. "
+            f"До конца: {minutes} мин."
         )
 
     else:
 
         text = (
-            "⚡ <b>Лидер сменился!</b>\n\n"
-            f"👑 {mention}\n\n"
-            f"⏱ {minutes}:{seconds:02d}"
+            f"{LEADER_EMOJI} <b>Перебито!</b>\n\n"
+            f"Новый лидер: {mention}. "
+            f"До конца: {minutes} мин."
         )
 
     try:
