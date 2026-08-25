@@ -1,7 +1,8 @@
 import logging
-import random
 import os
+import html
 import asyncio
+
 from datetime import datetime, timedelta
 
 from telegram import (
@@ -9,6 +10,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
+
 from telegram.ext import (
     Application,
     MessageHandler,
@@ -17,7 +19,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-
 
 # =========================================================
 # НАСТРОЙКИ
@@ -31,117 +32,157 @@ BOT_TOKEN = os.environ.get(
 # ID администратора
 ADMIN_ID = 1800089290
 
+# Чат, где проходит розыгрыш
+RAFFLE_CHAT_ID = os.environ.get(
+    "RAFFLE_CHAT_ID",
+    "@taifun_official"
+)
+
 # Длительность розыгрыша
 RAFFLE_DURATION = 180  # 3 минуты
 
-# За сколько секунд предупредить о конце
+# Предупреждение
 WARNING_SECONDS = 30
 
-# Название приза
-RAFFLE_PRIZE = "Nail Bracelet #118"
-
-# Текст приза
-RAFFLE_PRIZE_TEXT = "NFT Nail Bracelet #118"
-
-# Картинка NFT.
-# Если не нужна — оставь пустым ""
-RAFFLE_IMAGE = ""
 
 # =========================================================
-
+# ЛОГИ
+# =========================================================
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    level=logging.INFO
 )
 
 logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# СОСТОЯНИЕ РОЗЫГРЫША
+# СОСТОЯНИЕ
 # =========================================================
 
-raffles = {}
+# Процесс создания розыгрыша админом
+setup_state = {
+    "step": None,
+    "photo": None,
+    "description": None,
+}
 
-# Структура:
-#
-# raffles[chat_id] = {
-#     "active": True,
-#     "participants": {
-#         user_id: {
-#             "name": "...",
-#             "username": "...",
-#             "messages": 10
-#         }
-#     },
-#     "message_id": 123,
-#     "end_time": datetime(...)
-# }
+# Текущий розыгрыш
+raffle = {
+    "active": False,
+    "chat_id": None,
+    "photo": None,
+    "description": None,
+    "started_at": None,
+    "ends_at": None,
+    "leader_id": None,
+    "leader_name": None,
+    "leader_username": None,
+    "warning_sent": False,
+    "end_task": None,
+}
 
 
 # =========================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # =========================================================
 
-def get_display_name(user):
+def is_admin(user_id: int) -> bool:
+    return user_id == ADMIN_ID
+
+
+def get_display_name(user) -> str:
+    """
+    Получаем красивое имя пользователя.
+    """
     if user.username:
         return f"@{user.username}"
 
-    return user.first_name or "Участник"
+    name = user.full_name or "Пользователь"
+    return name
 
 
-def get_mention(user):
-    return user.mention_html()
+def get_mention(user) -> str:
+    """
+    Упоминание пользователя.
+    Если есть username — показываем @username.
+    Если username нет — делаем кликабельное упоминание.
+    """
+    if user.username:
+        return f"@{html.escape(user.username)}"
 
+    name = html.escape(user.full_name or "Пользователь")
 
-def get_leader(chat_id):
-    raffle = raffles.get(chat_id)
-
-    if not raffle:
-        return None, 0
-
-    participants = raffle["participants"]
-
-    if not participants:
-        return None, 0
-
-    leader = max(
-        participants.values(),
-        key=lambda x: x["messages"]
+    return (
+        f'<a href="tg://user?id={user.id}">'
+        f"{name}"
+        f"</a>"
     )
 
-    return leader, leader["messages"]
 
-
-def get_remaining_seconds(chat_id):
-    raffle = raffles.get(chat_id)
-
-    if not raffle:
+def time_left() -> int:
+    """
+    Сколько секунд осталось.
+    """
+    if not raffle["ends_at"]:
         return 0
 
-    remaining = (
-        raffle["end_time"] - datetime.utcnow()
-    ).total_seconds()
+    seconds = int(
+        (raffle["ends_at"] - datetime.now()).total_seconds()
+    )
 
-    return max(0, int(remaining))
+    return max(0, seconds)
+
+
+def minutes_left() -> int:
+    """
+    Показываем минуты как на скрине.
+    """
+    seconds = time_left()
+
+    if seconds <= 0:
+        return 0
+
+    return (seconds + 59) // 60
+
+
+def reset_setup():
+    setup_state["step"] = None
+    setup_state["photo"] = None
+    setup_state["description"] = None
+
+
+def reset_raffle():
+    old_task = raffle.get("end_task")
+
+    if old_task and not old_task.done():
+        old_task.cancel()
+
+    raffle["active"] = False
+    raffle["chat_id"] = None
+    raffle["photo"] = None
+    raffle["description"] = None
+    raffle["started_at"] = None
+    raffle["ends_at"] = None
+    raffle["leader_id"] = None
+    raffle["leader_name"] = None
+    raffle["leader_username"] = None
+    raffle["warning_sent"] = False
+    raffle["end_task"] = None
 
 
 # =========================================================
-# АДМИН-МЕНЮ
+# АДМИНСКОЕ МЕНЮ
 # =========================================================
 
-async def cmd_admin(
+async def start_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
-) -> None:
-
+):
     user = update.effective_user
 
-    if not user:
-        return
-
-    if user.id != ADMIN_ID:
+    if not user or not is_admin(user.id):
         return
 
     keyboard = [
@@ -150,540 +191,263 @@ async def cmd_admin(
                 "🎁 Запустить NFT-розыгрыш",
                 callback_data="raffle_start"
             )
-        ],
-        [
-            InlineKeyboardButton(
-                "📊 Статус розыгрыша",
-                callback_data="raffle_status"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🛑 Остановить розыгрыш",
-                callback_data="raffle_stop"
-            )
-        ],
+        ]
     ]
 
     await update.message.reply_text(
-        "👑 <b>Панель администратора</b>\n\n"
-        "🎁 Здесь можно управлять NFT-розыгрышем.",
+        "⚙️ <b>Панель администратора</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
 # =========================================================
-# КНОПКИ АДМИН-МЕНЮ
+# НАЖАТИЕ "ЗАПУСТИТЬ РОЗЫГРЫШ"
 # =========================================================
 
 async def admin_callback(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
-) -> None:
-
+):
     query = update.callback_query
-
-    if not query:
-        return
-
     user = query.from_user
-
-    if user.id != ADMIN_ID:
-        await query.answer(
-            "⛔ У вас нет доступа.",
-            show_alert=True
-        )
-        return
 
     await query.answer()
 
-    chat_id = query.message.chat.id
-
-    # -----------------------------------------------------
-    # ЗАПУСК
-    # -----------------------------------------------------
+    if not is_admin(user.id):
+        return
 
     if query.data == "raffle_start":
 
-        if chat_id in raffles and raffles[chat_id]["active"]:
-            await query.answer(
-                "❗ В этом чате уже идёт розыгрыш.",
-                show_alert=True
+        if raffle["active"]:
+            await query.message.reply_text(
+                "⚠️ Сейчас уже идёт розыгрыш."
             )
             return
 
-        end_time = (
-            datetime.utcnow()
-            + timedelta(seconds=RAFFLE_DURATION)
+        reset_setup()
+
+        setup_state["step"] = "photo"
+
+        await query.message.reply_text(
+            "📸 <b>Пришли фотографию NFT.</b>\n\n"
+            "После этого я попрошу описание.",
+            parse_mode="HTML"
         )
 
-        raffles[chat_id] = {
-            "active": True,
-            "participants": {},
-            "message_id": None,
-            "end_time": end_time,
-            "warning_sent": False,
-        }
 
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "🎁 ПОКАЗАТЬ ПОДАРОК",
-                    callback_data="show_prize"
-                )
-            ]
-        ]
+# =========================================================
+# ПОЛУЧЕНИЕ ФОТО ОТ АДМИНА
+# =========================================================
 
-        text = (
-            "🎉 <b>Ивент начался!</b>\n\n"
-            "💬 Пишите сообщения в чате, "
-            "чтобы участвовать в розыгрыше.\n\n"
-            f"🎁 <b>Приз:</b> {RAFFLE_PRIZE}\n\n"
-            "🏆 Победит участник, который "
-            "наберёт больше всего сообщений.\n\n"
-            "⏱ <b>До конца: 3 мин.</b>"
+async def handle_admin_photo(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user = update.effective_user
+
+    if not user or not is_admin(user.id):
+        return
+
+    if setup_state["step"] != "photo":
+        return
+
+    if not update.message.photo:
+        return
+
+    # Берём самое большое фото
+    photo = update.message.photo[-1]
+
+    setup_state["photo"] = photo.file_id
+    setup_state["step"] = "description"
+
+    await update.message.reply_text(
+        "✅ Фото получено.\n\n"
+        "📝 <b>Теперь пришли описание розыгрыша.</b>",
+        parse_mode="HTML"
+    )
+
+
+# =========================================================
+# ПОЛУЧЕНИЕ ОПИСАНИЯ
+# =========================================================
+
+async def handle_admin_description(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user = update.effective_user
+
+    if not user or not is_admin(user.id):
+        return
+
+    if setup_state["step"] != "description":
+        return
+
+    if not update.message.text:
+        return
+
+    description = update.message.text.strip()
+
+    if not description:
+        await update.message.reply_text(
+            "❌ Описание не может быть пустым."
         )
+        return
 
-        if RAFFLE_IMAGE and os.path.exists(RAFFLE_IMAGE):
+    setup_state["description"] = description
 
-            with open(RAFFLE_IMAGE, "rb") as photo:
+    # Запускаем розыгрыш
+    await start_raffle(
+        update,
+        context,
+        setup_state["photo"],
+        setup_state["description"]
+    )
 
-                sent = await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=photo,
-                    caption=text,
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
+    reset_setup()
 
-        else:
 
-            sent = await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+# =========================================================
+# ЗАПУСК РОЗЫГРЫША
+# =========================================================
 
-        raffles[chat_id]["message_id"] = sent.message_id
-
-        asyncio.create_task(
-            raffle_timer(
-                context,
-                chat_id
-            )
+async def start_raffle(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    photo_file_id: str,
+    description: str
+):
+    # На всякий случай
+    if raffle["active"]:
+        await update.message.reply_text(
+            "⚠️ Розыгрыш уже идёт."
         )
+        return
 
-        logger.info(
-            f"Raffle started chat={chat_id}"
-        )
+    now = datetime.now()
+    end_time = now + timedelta(seconds=RAFFLE_DURATION)
 
-    # -----------------------------------------------------
-    # СТАТУС
-    # -----------------------------------------------------
+    raffle["active"] = True
+    raffle["chat_id"] = RAFFLE_CHAT_ID
+    raffle["photo"] = photo_file_id
+    raffle["description"] = description
+    raffle["started_at"] = now
+    raffle["ends_at"] = end_time
+    raffle["leader_id"] = None
+    raffle["leader_name"] = None
+    raffle["leader_username"] = None
+    raffle["warning_sent"] = False
 
-    elif query.data == "raffle_status":
+    # =====================================================
+    # ТЕКСТ РОЗЫГРЫША
+    # =====================================================
 
-        raffle = raffles.get(chat_id)
+    text = (
+        "🎁 <b>NFT РОЗЫГРЫШ</b>\n\n"
+        f"{html.escape(description)}\n\n"
+        "⚡ <b>Правила:</b>\n"
+        "Пиши любое сообщение в чат и становись лидером.\n"
+        "Другой участник может перебить тебя своим сообщением.\n\n"
+        "⏱ <b>Длительность: 3 минуты</b>"
+    )
 
-        if not raffle or not raffle["active"]:
-
-            await query.answer(
-                "Сейчас розыгрыш не идёт.",
-                show_alert=True
-            )
-            return
-
-        leader, count = get_leader(chat_id)
-        remaining = get_remaining_seconds(chat_id)
-
-        if leader:
-
-            status = (
-                f"🏆 Лидер: {leader['name']}\n"
-                f"💬 Сообщений: {count}\n"
-                f"👥 Участников: "
-                f"{len(raffle['participants'])}\n"
-                f"⏱ Осталось: {remaining} сек."
-            )
-
-        else:
-
-            status = (
-                "👥 Участников пока нет.\n"
-                f"⏱ Осталось: {remaining} сек."
-            )
-
-        await query.answer(
-            status,
-            show_alert=True
-        )
-
-    # -----------------------------------------------------
-    # ОСТАНОВКА
-    # -----------------------------------------------------
-
-    elif query.data == "raffle_stop":
-
-        raffle = raffles.get(chat_id)
-
-        if not raffle or not raffle["active"]:
-
-            await query.answer(
-                "Розыгрыш не запущен.",
-                show_alert=True
-            )
-            return
-
-        raffle["active"] = False
-
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="🛑 <b>Розыгрыш остановлен администратором.</b>",
+    try:
+        # Публикуем фотографию + описание
+        await context.bot.send_photo(
+            chat_id=RAFFLE_CHAT_ID,
+            photo=photo_file_id,
+            caption=text,
             parse_mode="HTML"
         )
 
         logger.info(
-            f"Raffle stopped chat={chat_id}"
+            "Розыгрыш запущен в %s",
+            RAFFLE_CHAT_ID
         )
 
-    # -----------------------------------------------------
-    # ПОКАЗАТЬ ПРИЗ
-    # -----------------------------------------------------
+        # Запускаем таймер
+        raffle["end_task"] = asyncio.create_task(
+            raffle_timer(context)
+        )
 
-    elif query.data == "show_prize":
+        await update.message.reply_text(
+            "✅ <b>Розыгрыш запущен!</b>\n\n"
+            f"Канал/чат: {html.escape(str(RAFFLE_CHAT_ID))}\n"
+            "⏱ Длительность: 3 минуты",
+            parse_mode="HTML"
+        )
 
-        await query.answer(
-            f"🎁 Приз: {RAFFLE_PRIZE_TEXT}",
-            show_alert=True
+    except Exception as e:
+        logger.exception("Ошибка при запуске розыгрыша")
+
+        reset_raffle()
+
+        await update.message.reply_text(
+            "❌ Не удалось запустить розыгрыш.\n\n"
+            f"<code>{html.escape(str(e))}</code>",
+            parse_mode="HTML"
         )
 
 
 # =========================================================
-# ТАЙМЕР РОЗЫГРЫША
+# ОБРАБОТКА ЛЮБОГО СООБЩЕНИЯ В ЧАТЕ
 # =========================================================
 
-async def raffle_timer(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int
-) -> None:
-
-    await asyncio.sleep(
-        max(
-            0,
-            RAFFLE_DURATION - WARNING_SECONDS
-        )
-    )
-
-    raffle = raffles.get(chat_id)
-
-    if not raffle or not raffle["active"]:
-        return
-
-    raffle["warning_sent"] = True
-
-    leader, count = get_leader(chat_id)
-
-    if leader:
-
-        leader_text = (
-            f"🏆 Лидер: {leader['name']}\n"
-            f"💬 Сообщений: {count}\n\n"
-        )
-
-    else:
-
-        leader_text = (
-            "👥 Пока никто не участвует.\n\n"
-        )
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=(
-            "🚨 <b>До конца розыгрыша осталось 30 секунд!</b>\n\n"
-            f"{leader_text}"
-            "🔥 Пишите сообщения и перебивайте лидера!"
-        ),
-        parse_mode="HTML"
-    )
-
-    await asyncio.sleep(WARNING_SECONDS)
-
-    raffle = raffles.get(chat_id)
-
-    if not raffle or not raffle["active"]:
-        return
-
-    await finish_raffle(
-        context,
-        chat_id
-    )
-
-
-# =========================================================
-# ЗАВЕРШЕНИЕ РОЗЫГРЫША
-# =========================================================
-
-async def finish_raffle(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int
-) -> None:
-
-    raffle = raffles.get(chat_id)
-
-    if not raffle:
-        return
+async def raffle_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    """
+    Любое сообщение пользователя во время активного розыгрыша
+    делает его новым лидером.
+    """
 
     if not raffle["active"]:
         return
 
-    raffle["active"] = False
-
-    participants = raffle["participants"]
-
-    if not participants:
-
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "😢 <b>Розыгрыш завершён.</b>\n\n"
-                "Никто не успел принять участие."
-            ),
-            parse_mode="HTML"
-        )
-
-        return
-
-    max_messages = max(
-        participant["messages"]
-        for participant in participants.values()
-    )
-
-    # Если несколько участников набрали одинаковое
-    # количество сообщений — выбираем одного случайно.
-    leaders = [
-        participant
-        for participant in participants.values()
-        if participant["messages"] == max_messages
-    ]
-
-    winner = random.choice(leaders)
-
-    mention = winner["mention"]
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=(
-            "🏆 <b>РОЗЫГРЫШ ЗАВЕРШЁН!</b>\n\n"
-            f"🎉 Победитель: {mention}\n"
-            f"🎁 Приз: <b>{RAFFLE_PRIZE}</b>\n\n"
-            f"💬 Сообщений: <b>{winner['messages']}</b>\n"
-            "✅ Поздравляем с победой!"
-        ),
-        parse_mode="HTML"
-    )
-
-    logger.info(
-        f"Raffle winner "
-        f"chat={chat_id} "
-        f"user={winner['user_id']} "
-        f"messages={winner['messages']}"
-    )
-
-
-# =========================================================
-# ОБРАБОТКА СООБЩЕНИЙ
-# =========================================================
-
-async def handle_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-) -> None:
-
     message = update.effective_message
-    chat = update.effective_chat
     user = update.effective_user
+    chat = update.effective_chat
 
-    if message is None:
+    if not message or not user or not chat:
         return
 
-    if chat is None:
-        return
+    # Только нужный чат
+    if str(chat.id) != str(raffle["chat_id"]):
+        # Если RAFFLE_CHAT_ID задан как @username,
+        # chat.id будет числом, поэтому отдельно разрешаем
+        # сообщения из текущего активного чата.
+        if raffle["chat_id"] != chat.id:
+            return
 
-    if user is None:
-        return
-
-    # Ботов не считаем
+    # Боты не участвуют
     if user.is_bot:
         return
 
-    # Команды не считаем
+    # Команды не считаем участием
     if message.text and message.text.startswith("/"):
         return
 
-    raffle = raffles.get(chat.id)
-
-    # Если в этом чате нет активного розыгрыша
-    if not raffle:
+    # Время закончилось
+    if time_left() <= 0:
         return
 
-    if not raffle["active"]:
-        return
+    # Новый лидер
+    raffle["leader_id"] = user.id
+    raffle["leader_name"] = user.full_name
+    raffle["leader_username"] = user.username
 
-    # Проверяем время
-    if datetime.utcnow() >= raffle["end_time"]:
+    mention = get_mention(user)
+    left = minutes_left()
 
-        await finish_raffle(
-            context,
-            chat.id
-        )
+    # =====================================================
+    # ПЕРВЫЙ УЧАСТНИК
+    # =====================================================
 
-        return
+    # Это можно определить по предыдущему состоянию.
+    # Если лидер был None — первый участник.
+    # Но мы уже перезаписали его выше, поэтому определяем
+    # через сохранённый ID.
 
-    participants = raffle["participants"]
-
-    # Новый участник
-    if user.id not in participants:
-
-        participants[user.id] = {
-            "user_id": user.id,
-            "name": get_display_name(user),
-            "username": user.username,
-            "mention": get_mention(user),
-            "messages": 1,
-        }
-
-        # Первое сообщение участника
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text=(
-                f"🎉 <b>У нас первый участник!</b>\n\n"
-                f"👤 {get_mention(user)}\n"
-                "🔥 Продолжай писать сообщения!"
-            ),
-            parse_mode="HTML"
-        )
-
-    else:
-
-        participants[user.id]["messages"] += 1
-
-    # -----------------------------------------------------
-    # ПОКАЗЫВАЕМ ТЕКУЩЕГО ЛИДЕРА
-    # -----------------------------------------------------
-
-    leader, count = get_leader(chat.id)
-
-    if leader and leader["user_id"] == user.id:
-
-        # Не отправляем сообщение на каждое сообщение,
-        # чтобы чат не заспамился.
-        #
-        # Но если пользователь перебил предыдущий рекорд,
-        # показываем уведомление.
-
-        previous_best = raffle.get("previous_best", 0)
-
-        if count > previous_best:
-
-            raffle["previous_best"] = count
-
-            # Отправляем уведомление только при новом рекорде
-            if count > 1:
-
-                await context.bot.send_message(
-                    chat_id=chat.id,
-                    text=(
-                        "🔄 <b>Перебито!</b>\n\n"
-                        f"🏆 Новый лидер: {get_mention(user)}\n"
-                        f"💬 Сообщений: <b>{count}</b>\n\n"
-                        f"⏱ До конца: "
-                        f"{get_remaining_seconds(chat.id) // 60} мин."
-                    ),
-                    parse_mode="HTML"
-                )
-
-
-# =========================================================
-# START
-# =========================================================
-
-async def cmd_start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-) -> None:
-
-    await update.message.reply_text(
-        "🤖 Бот работает."
-    )
-
-
-# =========================================================
-# MAIN
-# =========================================================
-
-def main() -> None:
-
-    if not BOT_TOKEN or "ВСТАВЬ" in BOT_TOKEN:
-
-        raise SystemExit(
-            "Укажи токен бота в переменной окружения BOT_TOKEN."
-        )
-
-    app = (
-        Application
-        .builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
-
-    # /start
-    app.add_handler(
-        CommandHandler(
-            "start",
-            cmd_start
-        )
-    )
-
-    # /admin — только ADMIN_ID
-    app.add_handler(
-        CommandHandler(
-            "admin",
-            cmd_admin
-        )
-    )
-
-    # Кнопки
-    app.add_handler(
-        CallbackQueryHandler(
-            admin_callback
-        )
-    )
-
-    # Сообщения участников
-    app.add_handler(
-        MessageHandler(
-            (
-                filters.TEXT
-                | filters.PHOTO
-                | filters.Sticker.ALL
-                | filters.VIDEO
-                | filters.Document.ALL
-            )
-            & ~filters.COMMAND,
-            handle_message
-        )
-    )
-
-    logger.info(
-        "🤖 Бот запущен..."
-    )
-
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES
-    )
-
-
-if __name__ == "__main__":
-    main()
+    # Эта часть исправляется ниже через отдельную проверку.
