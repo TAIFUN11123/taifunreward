@@ -1,6 +1,7 @@
 import logging
 import html
 import asyncio
+import os
 
 from datetime import datetime, timedelta
 
@@ -24,7 +25,7 @@ from telegram.ext import (
 # НАСТРОЙКИ
 # =========================================================
 
-BOT_TOKEN = "ВСТАВЬ_СЮДА_ТОКЕН_ОТ_BOTFATHER"
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # Telegram ID владельца / администратора
 ADMIN_ID = 1800089290
@@ -527,10 +528,6 @@ async def start_raffle(
     # ТЕКСТ
     # =====================================================
 
-    # ВАЖНО:
-    # Здесь НЕТ добавленных правил.
-    # Описание администратора публикуется как есть.
-
     caption = description
 
     try:
@@ -808,13 +805,11 @@ async def error_handler(
 
 def main():
 
-    if (
-        not BOT_TOKEN
-        or BOT_TOKEN == "ВСТАВЬ_СЮДА_ТОКЕН_ОТ_BOTFATHER"
-    ):
+    if not BOT_TOKEN:
 
         raise RuntimeError(
-            "Вставь токен бота в BOT_TOKEN."
+            "Переменная окружения BOT_TOKEN не найдена. "
+            "Проверь имя переменной в настройках BotHost."
         )
 
     application = (
