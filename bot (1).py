@@ -227,7 +227,7 @@ async def start_command(
     if not is_admin(user.id):
 
         await message.reply_text(
-            f"💬 Чат — {get_chat_name(chat)}"
+            f"💬 Чат — {TARGET_CHAT_USERNAME}"
         )
 
         return
@@ -267,7 +267,7 @@ async def start_command(
 
         status = (
             "⚪ Розыгрыш не идёт\n\n"
-            f"Чат — {get_chat_name(chat)}"
+            f"Чат — {TARGET_CHAT_USERNAME}"
         )
 
     await message.reply_text(
