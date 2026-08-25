@@ -100,8 +100,6 @@ async def handle_message(
         f"<b>{gift_name} {gift_emoji}</b> "
         f"от @{GIFT_SENDER_USERNAME}\n"
         f"✅ Подарок отправлен.\n\n"
-        f"🌟 Купить звезды : "
-        f"@taifstars_bot\n\n"
         f"🚨 Пишите сообщения в чате, "
         f"и получайте возможность так же "
         f"залутать подарки"
