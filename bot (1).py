@@ -30,6 +30,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 # Telegram ID владельца / администратора
 ADMIN_ID = 1800089290
 
+# Чат, куда всегда публикуется розыгрыш (юзернейм канала/группы)
+TARGET_CHAT_USERNAME = "@Chattaifunn"
+
 # Длительность розыгрыша
 RAFFLE_DURATION = 180
 
@@ -496,6 +499,36 @@ async def start_raffle(
 
         return
 
+    # =====================================================
+    # РЕЗОЛВИМ ЦЕЛЕВОЙ ЧАТ (всегда TARGET_CHAT_USERNAME,
+    # независимо от того, где админ запустил розыгрыш)
+    # =====================================================
+
+    try:
+
+        target_chat = await context.bot.get_chat(
+            TARGET_CHAT_USERNAME
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            "Не удалось найти целевой чат"
+        )
+
+        await admin_message.reply_text(
+            "❌ Не удалось найти чат "
+            f"{TARGET_CHAT_USERNAME}.\n\n"
+            "Проверь, что бот добавлен в этот чат "
+            "как участник/админ.\n\n"
+            f"{str(e)}"
+        )
+
+        return
+
+    real_chat_id = target_chat.id
+    real_chat_title = get_chat_name(target_chat)
+
     now = datetime.now()
 
     end_time = (
@@ -511,8 +544,8 @@ async def start_raffle(
 
     raffle["active"] = True
 
-    raffle["chat_id"] = chat_id
-    raffle["chat_title"] = chat_title
+    raffle["chat_id"] = real_chat_id
+    raffle["chat_title"] = real_chat_title
 
     raffle["photo"] = photo
     raffle["description"] = description
@@ -533,18 +566,18 @@ async def start_raffle(
     try:
 
         # =================================================
-        # ПУБЛИКУЕМ NFT В ТОТ ЖЕ ЧАТ
+        # ПУБЛИКУЕМ NFT В ЦЕЛЕВОЙ ЧАТ
         # =================================================
 
         await context.bot.send_photo(
-            chat_id=chat_id,
+            chat_id=real_chat_id,
             photo=photo,
             caption=caption,
         )
 
         logger.info(
             "Розыгрыш запущен: %s",
-            chat_title,
+            real_chat_title,
         )
 
         # =================================================
@@ -565,7 +598,7 @@ async def start_raffle(
 
         await admin_message.reply_text(
             "✅ Розыгрыш запущен!\n\n"
-            f"Чат — {chat_title}\n"
+            f"Чат — {real_chat_title}\n"
             "⏱ Время — 3 минуты"
         )
 
