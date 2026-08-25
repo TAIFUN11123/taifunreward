@@ -29,7 +29,7 @@ BOT_TOKEN = os.environ.get(
 )
 
 # ID администратора
-ADMIN_ID = 5742716612
+ADMIN_ID = 1800089290
 
 # Длительность розыгрыша
 RAFFLE_DURATION = 180  # 3 минуты
