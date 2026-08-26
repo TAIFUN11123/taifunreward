@@ -3,6 +3,7 @@ import html
 import asyncio
 import os
 import math
+import random
 
 from datetime import datetime, timedelta
 
@@ -31,14 +32,24 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 # Telegram ID владельца / администратора
 ADMIN_ID = 1800089290
 
-# Чат, куда всегда публикуется розыгрыш (юзернейм канала/группы)
+# Чат, куда всегда публикуется розыгрыш
 TARGET_CHAT_USERNAME = "@Chattaifunn"
 
-# Длительность розыгрыша
+# Длительность NFT-розыгрыша
 RAFFLE_DURATION = 180
 
 # Предупреждение за 30 секунд
 WARNING_SECONDS = 30
+
+# =========================================================
+# МИШКА
+# =========================================================
+
+# 0.010 = 1% шанс на каждое сообщение
+MISHKA_WIN_CHANCE = 0.010
+
+# Кто выдаёт мишку
+MISHKA_FROM = "@xxiwk"
 
 
 # =========================================================
@@ -67,7 +78,7 @@ setup_state = {
 
 
 # =========================================================
-# СОСТОЯНИЕ РОЗЫГРЫША
+# СОСТОЯНИЕ NFT-РОЗЫГРЫША
 # =========================================================
 
 raffle = {
@@ -89,6 +100,11 @@ raffle = {
 
     "end_task": None,
     "warning_task": None,
+
+    # Версия таймера.
+    # Нужна, чтобы старый отменённый таймер
+    # не смог повлиять на новый.
+    "timer_generation": 0,
 }
 
 
@@ -171,10 +187,10 @@ def reset_setup():
 
 
 # =========================================================
-# СБРОС РОЗЫГРЫША
+# ОТМЕНА ТАЙМЕРА
 # =========================================================
 
-def reset_raffle():
+def cancel_raffle_tasks():
 
     end_task = raffle.get("end_task")
     warning_task = raffle.get("warning_task")
@@ -184,6 +200,22 @@ def reset_raffle():
 
     if warning_task and not warning_task.done():
         warning_task.cancel()
+
+    raffle["end_task"] = None
+    raffle["warning_task"] = None
+
+
+# =========================================================
+# СБРОС РОЗЫГРЫША
+# =========================================================
+
+def reset_raffle():
+
+    cancel_raffle_tasks()
+
+    # Увеличиваем поколение таймера.
+    # Старые задачи после этого становятся недействительными.
+    raffle["timer_generation"] += 1
 
     raffle["active"] = False
 
@@ -201,8 +233,43 @@ def reset_raffle():
     raffle["leader_name"] = None
     raffle["leader_username"] = None
 
-    raffle["end_task"] = None
-    raffle["warning_task"] = None
+
+# =========================================================
+# ЗАПУСК НОВОГО ТАЙМЕРА
+# =========================================================
+
+def restart_raffle_timer(context):
+
+    # Отменяем старый таймер
+    old_task = raffle.get("end_task")
+
+    if old_task and not old_task.done():
+        old_task.cancel()
+
+    # Новое поколение таймера
+    raffle["timer_generation"] += 1
+
+    generation = raffle["timer_generation"]
+
+    # Новый дедлайн = сейчас + 3 минуты
+    now = datetime.now()
+
+    raffle["ends_at"] = (
+        now
+        + timedelta(
+            seconds=RAFFLE_DURATION
+        )
+    )
+
+    # Запускаем новый таймер
+    task = asyncio.create_task(
+        raffle_end_timer(
+            context,
+            generation,
+        )
+    )
+
+    raffle["end_task"] = task
 
 
 # =========================================================
@@ -261,7 +328,8 @@ async def start_command(
 
         status = (
             "🟢 Розыгрыш идёт\n\n"
-            f"Чат — {current_chat}"
+            f"Чат — {current_chat}\n"
+            f"⏱ Осталось — {time_left()} сек."
         )
 
     else:
@@ -320,6 +388,7 @@ async def admin_callback(
 
         # Запоминаем чат, где админ нажал кнопку
         setup_state["chat_id"] = chat.id
+
         setup_state["chat_title"] = (
             get_chat_name(chat)
         )
@@ -347,9 +416,7 @@ async def admin_callback(
         # Сохраняем данные текущего лидера
         leader_id = raffle["leader_id"]
         leader_name = raffle["leader_name"]
-        leader_username = raffle[
-            "leader_username"
-        ]
+        leader_username = raffle["leader_username"]
 
         # Останавливаем
         reset_raffle()
@@ -480,7 +547,7 @@ async def handle_description(
 
 
 # =========================================================
-# ЗАПУСК РОЗЫГРЫША
+# ЗАПУСК NFT-РОЗЫГРЫША
 # =========================================================
 
 async def start_raffle(
@@ -501,8 +568,7 @@ async def start_raffle(
         return
 
     # =====================================================
-    # РЕЗОЛВИМ ЦЕЛЕВОЙ ЧАТ (всегда TARGET_CHAT_USERNAME,
-    # независимо от того, где админ запустил розыгрыш)
+    # РЕЗОЛВИМ ЦЕЛЕВОЙ ЧАТ
     # =====================================================
 
     try:
@@ -532,13 +598,6 @@ async def start_raffle(
 
     now = datetime.now()
 
-    end_time = (
-        now
-        + timedelta(
-            seconds=RAFFLE_DURATION
-        )
-    )
-
     # =====================================================
     # СОХРАНЯЕМ РОЗЫГРЫШ
     # =====================================================
@@ -552,22 +611,30 @@ async def start_raffle(
     raffle["description"] = description
 
     raffle["started_at"] = now
-    raffle["ends_at"] = end_time
 
     raffle["leader_id"] = None
     raffle["leader_name"] = None
     raffle["leader_username"] = None
 
-    # =====================================================
-    # ТЕКСТ
-    # =====================================================
+    # Сбрасываем старые задачи/поколение
+    cancel_raffle_tasks()
+
+    raffle["timer_generation"] += 1
+
+    # Первый дедлайн
+    raffle["ends_at"] = (
+        now
+        + timedelta(
+            seconds=RAFFLE_DURATION
+        )
+    )
 
     caption = description
 
     try:
 
         # =================================================
-        # ПУБЛИКУЕМ NFT В ЦЕЛЕВОЙ ЧАТ
+        # ПУБЛИКУЕМ NFT
         # =================================================
 
         await context.bot.send_photo(
@@ -585,10 +652,13 @@ async def start_raffle(
         # ЗАПУСКАЕМ ТАЙМЕР
         # =================================================
 
+        generation = raffle["timer_generation"]
+
         raffle["end_task"] = (
             asyncio.create_task(
                 raffle_end_timer(
-                    context
+                    context,
+                    generation,
                 )
             )
         )
@@ -618,6 +688,61 @@ async def start_raffle(
 
 
 # =========================================================
+# МИШКА — СЛУЧАЙНЫЙ ПРИЗ
+# =========================================================
+
+async def try_mishka(
+    context,
+    message,
+    user,
+):
+
+    # Случайный шанс на каждое сообщение.
+    #
+    # random.random() возвращает число от 0.0 до 1.0.
+    #
+    # При MISHKA_WIN_CHANCE = 0.010:
+    # вероятность = 1%.
+
+    if random.random() >= MISHKA_WIN_CHANCE:
+        return False
+
+    mention = get_mention(user)
+
+    text = (
+        "🎉 <b>Поздравляю!</b>\n\n"
+        f"🎁 {mention} выиграл МИШКА 🧸 "
+        f"от {html.escape(MISHKA_FROM)}\n"
+        "✅ Подарок отправлен.\n\n"
+        "🚨 Пишите сообщения в чате, и "
+        "получайте возможность так же залутать подарки"
+    )
+
+    try:
+
+        await message.reply_text(
+            text,
+            parse_mode="HTML",
+        )
+
+        logger.info(
+            "МИШКА выигран: user_id=%s username=%s",
+            user.id,
+            user.username,
+        )
+
+        return True
+
+    except Exception:
+
+        logger.exception(
+            "Не удалось отправить сообщение о мишке"
+        )
+
+        return False
+
+
+# =========================================================
 # СООБЩЕНИЕ УЧАСТНИКА
 # =========================================================
 
@@ -626,9 +751,6 @@ async def raffle_message(
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
-    if not raffle["active"]:
-        return
-
     message = update.effective_message
     user = update.effective_user
     chat = update.effective_chat
@@ -636,27 +758,56 @@ async def raffle_message(
     if not message or not user or not chat:
         return
 
-    # Только текущий чат
-    if chat.id != raffle["chat_id"]:
-        return
-
     # Боты не участвуют
     if user.is_bot:
         return
 
-    # Команды не считаются ходом
+    # Команды не считаются сообщением
     if (
         message.text
         and message.text.startswith("/")
     ):
         return
 
+    # =====================================================
+    # МИШКА
+    # =====================================================
+
+    # Мишка работает независимо от NFT-розыгрыша.
+    #
+    # Поэтому проверка идёт ДО:
+    # if not raffle["active"]:
+    #
+    # Пользователь может выиграть мишку просто
+    # за сообщение в нужном чате.
+
+    if chat.id == raffle["chat_id"] or chat.username == TARGET_CHAT_USERNAME.lstrip("@"):
+
+        await try_mishka(
+            context=context,
+            message=message,
+            user=user,
+        )
+
+    # =====================================================
+    # NFT-РОЗЫГРЫШ
+    # =====================================================
+
+    if not raffle["active"]:
+        return
+
+    # Только текущий чат NFT-розыгрыша
+    if chat.id != raffle["chat_id"]:
+        return
+
     # Время закончилось
     if time_left() <= 0:
         return
 
-    # Если пишет уже текущий лидер — ничего не делаем,
-    # таймер и лидер не обновляются
+    # Если пишет уже текущий лидер:
+    # для NFT-лидерства ничего не делаем.
+    #
+    # Но мишка выше всё равно проверился.
     if raffle["leader_id"] == user.id:
         return
 
@@ -670,19 +821,46 @@ async def raffle_message(
     raffle["leader_name"] = user.full_name
     raffle["leader_username"] = user.username
 
+    # =====================================================
+    # СБРАСЫВАЕМ ТАЙМЕР
+    # =====================================================
+
+    #
+    # ВАЖНО:
+    #
+    # Каждый новый лидер получает новые 3 минуты.
+    #
+    # Старый timer отменяется.
+    # ends_at становится NOW + 180 секунд.
+    # Создаётся новый timer.
+    #
+
+    restart_raffle_timer(context)
+
     mention = get_mention(user)
 
-    seconds = time_left()
+    # =====================================================
+    # КОРРЕКТНОЕ ОТОБРАЖЕНИЕ МИНУТ
+    # =====================================================
 
-    minutes = seconds // 60
-    seconds = seconds % 60
+    seconds_left = time_left()
+
+    # 179 секунд -> 3 минуты
+    # 180 секунд -> 3 минуты
+    # 121 секунда -> 3 минуты
+    # 120 секунд -> 2 минуты
+    minutes = math.ceil(
+        seconds_left / 60
+    )
 
     # =====================================================
     # СООБЩЕНИЕ О ЛИДЕРЕ
     # =====================================================
 
     LEADER_EMOJI = (
-        '<tg-emoji emoji-id="5350356823528455446">✨</tg-emoji>'
+        '<tg-emoji emoji-id="5350356823528455446">'
+        '✨'
+        '</tg-emoji>'
     )
 
     if previous_leader is None:
@@ -716,12 +894,15 @@ async def raffle_message(
 
 
 # =========================================================
-# ТАЙМЕР
+# ТАЙМЕР NFT-РОЗЫГРЫША
 # =========================================================
 
 async def raffle_end_timer(
     context,
+    generation,
 ):
+
+    current_task = asyncio.current_task()
 
     try:
 
@@ -730,11 +911,25 @@ async def raffle_end_timer(
         # =================================================
 
         await asyncio.sleep(
-            RAFFLE_DURATION
-            - WARNING_SECONDS
+            max(
+                0,
+                RAFFLE_DURATION
+                - WARNING_SECONDS,
+            )
         )
 
+        # =================================================
+        # ПРОВЕРКА АКТУАЛЬНОСТИ
+        # =================================================
+
         if not raffle["active"]:
+            return
+
+        if raffle["timer_generation"] != generation:
+            return
+
+        # Если этот task уже не является текущим
+        if raffle["end_task"] is not current_task:
             return
 
         # =================================================
@@ -757,8 +952,36 @@ async def raffle_end_timer(
             WARNING_SECONDS
         )
 
+        # =================================================
+        # ПРОВЕРКА ПОСЛЕ ОЖИДАНИЯ
+        # =================================================
+
         if not raffle["active"]:
             return
+
+        if raffle["timer_generation"] != generation:
+            return
+
+        if raffle["end_task"] is not current_task:
+            return
+
+        # Дополнительная проверка реального времени.
+        # Это защищает от небольших задержек event loop.
+
+        if time_left() > 0:
+
+            await asyncio.sleep(
+                time_left()
+            )
+
+            if not raffle["active"]:
+                return
+
+            if raffle["timer_generation"] != generation:
+                return
+
+            if raffle["end_task"] is not current_task:
+                return
 
         # =================================================
         # ПОБЕДИТЕЛЬ
@@ -782,9 +1005,7 @@ async def raffle_end_timer(
                 winner = (
                     "@"
                     + html.escape(
-                        raffle[
-                            "leader_username"
-                        ]
+                        raffle["leader_username"]
                     )
                 )
 
@@ -809,8 +1030,11 @@ async def raffle_end_timer(
 
     except asyncio.CancelledError:
 
+        # Это нормальная ситуация:
+        # новый лидер отменил старый таймер.
         logger.info(
-            "Таймер отменён."
+            "Старый таймер отменён: generation=%s",
+            generation,
         )
 
         return
@@ -823,8 +1047,18 @@ async def raffle_end_timer(
 
     finally:
 
-        raffle["active"] = False
-        raffle["end_task"] = None
+        # Очень важно:
+        # старый timer НЕ должен обнулить end_task
+        # нового лидера.
+
+        if (
+            raffle.get("end_task") is current_task
+            and raffle.get("timer_generation") == generation
+        ):
+            raffle["end_task"] = None
+
+            if raffle["active"]:
+                raffle["active"] = False
 
 
 # =========================================================
@@ -937,6 +1171,12 @@ def main():
     logger.info(
         "Администратор: %s",
         ADMIN_ID,
+    )
+
+    logger.info(
+        "Шанс мишки: %.3f (%.2f%%)",
+        MISHKA_WIN_CHANCE,
+        MISHKA_WIN_CHANCE * 100,
     )
 
     logger.info(
