@@ -70,10 +70,12 @@ logger = logging.getLogger(__name__)
 
 setup_state = {
     "step": None,
+    "type": None,  # "nft" или "number"
     "chat_id": None,
     "chat_title": None,
     "photo": None,
     "description": None,
+    "number": None,
 }
 
 
@@ -105,6 +107,30 @@ raffle = {
     # Нужна, чтобы старый отменённый таймер
     # не смог повлиять на новый.
     "timer_generation": 0,
+}
+
+
+# =========================================================
+# СОСТОЯНИЕ ИГРЫ "УГАДАЙ ЧИСЛО"
+# =========================================================
+
+number_game = {
+    "active": False,
+
+    "chat_id": None,
+    "chat_title": None,
+    "chat_username": None,
+
+    "photo": None,
+    "description": None,
+
+    "number": None,
+
+    "started_at": None,
+
+    "winner_id": None,
+    "winner_name": None,
+    "winner_username": None,
 }
 
 
@@ -180,10 +206,12 @@ def time_left() -> int:
 def reset_setup():
 
     setup_state["step"] = None
+    setup_state["type"] = None
     setup_state["chat_id"] = None
     setup_state["chat_title"] = None
     setup_state["photo"] = None
     setup_state["description"] = None
+    setup_state["number"] = None
 
 
 # =========================================================
@@ -232,6 +260,30 @@ def reset_raffle():
     raffle["leader_id"] = None
     raffle["leader_name"] = None
     raffle["leader_username"] = None
+
+
+# =========================================================
+# СБРОС ИГРЫ "УГАДАЙ ЧИСЛО"
+# =========================================================
+
+def reset_guess_game():
+
+    number_game["active"] = False
+
+    number_game["chat_id"] = None
+    number_game["chat_title"] = None
+    number_game["chat_username"] = None
+
+    number_game["photo"] = None
+    number_game["description"] = None
+
+    number_game["number"] = None
+
+    number_game["started_at"] = None
+
+    number_game["winner_id"] = None
+    number_game["winner_name"] = None
+    number_game["winner_username"] = None
 
 
 # =========================================================
@@ -317,6 +369,18 @@ async def start_command(
                 callback_data="raffle_stop",
             )
         ],
+        [
+            InlineKeyboardButton(
+                "🔢 Угадай число",
+                callback_data="guess_start",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🛑 Остановить \"Угадай число\"",
+                callback_data="guess_stop",
+            )
+        ],
     ]
 
     if raffle["active"]:
@@ -339,9 +403,28 @@ async def start_command(
             f"Чат — {TARGET_CHAT_USERNAME}"
         )
 
+    if number_game["active"]:
+
+        guess_chat = (
+            number_game["chat_title"]
+            or str(number_game["chat_id"])
+        )
+
+        guess_status = (
+            "🟢 \"Угадай число\" идёт\n\n"
+            f"Чат — {guess_chat}"
+        )
+
+    else:
+
+        guess_status = (
+            "⚪ \"Угадай число\" не идёт"
+        )
+
     await message.reply_text(
         "⚙️ <b>Панель администратора</b>\n\n"
-        f"{status}",
+        f"{status}\n\n"
+        f"{guess_status}",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             keyboard
@@ -385,6 +468,7 @@ async def admin_callback(
         reset_setup()
 
         setup_state["step"] = "photo"
+        setup_state["type"] = "nft"
 
         # Запоминаем чат, где админ нажал кнопку
         setup_state["chat_id"] = chat.id
@@ -394,7 +478,8 @@ async def admin_callback(
         )
 
         await query.message.reply_text(
-            "📸 Пришли фотографию NFT."
+            "📸 Пришли фотографию NFT.\n\n"
+            "Или отправь «-», если без фото."
         )
 
         return
@@ -460,6 +545,61 @@ async def admin_callback(
 
         return
 
+    # =====================================================
+    # УГАДАЙ ЧИСЛО — ЗАПУСК
+    # =====================================================
+
+    if query.data == "guess_start":
+
+        if number_game["active"]:
+
+            await query.message.reply_text(
+                "⚠️ Игра \"Угадай число\" уже идёт."
+            )
+
+            return
+
+        reset_setup()
+
+        setup_state["step"] = "number_input"
+        setup_state["type"] = "number"
+
+        setup_state["chat_id"] = chat.id
+
+        setup_state["chat_title"] = (
+            get_chat_name(chat)
+        )
+
+        await query.message.reply_text(
+            "🔢 Пришли число, которое нужно угадать."
+        )
+
+        return
+
+    # =====================================================
+    # УГАДАЙ ЧИСЛО — СТОП
+    # =====================================================
+
+    if query.data == "guess_stop":
+
+        if not number_game["active"]:
+
+            await query.message.reply_text(
+                "⚪ Игра \"Угадай число\" сейчас не идёт."
+            )
+
+            return
+
+        reset_guess_game()
+
+        await query.message.reply_text(
+            "🛑 <b>Игра \"Угадай число\" остановлена.</b>\n\n"
+            "Победитель не определён.",
+            parse_mode="HTML",
+        )
+
+        return
+
 
 # =========================================================
 # ПОЛУЧЕНИЕ ФОТО
@@ -503,8 +643,93 @@ async def handle_photo(
 
 
 # =========================================================
+# ПРОПУСК ФОТО (ТЕКСТОМ "-")
+# =========================================================
+
+async def handle_skip_photo(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    user = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+
+    if not user or not message or not chat:
+        return
+
+    if not is_admin(user.id):
+        return
+
+    if setup_state["step"] != "photo":
+        return
+
+    if chat.id != setup_state["chat_id"]:
+        return
+
+    if not message.text:
+        return
+
+    if message.text.strip() != "-":
+        return
+
+    setup_state["photo"] = None
+    setup_state["step"] = "description"
+
+    await message.reply_text(
+        "✅ Без фото.\n\n"
+        "📝 Пришли описание."
+    )
+
+
+# =========================================================
 # ПОЛУЧЕНИЕ ОПИСАНИЯ
 # =========================================================
+
+async def handle_number_input(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    user = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+
+    if not user or not message or not chat:
+        return
+
+    if not is_admin(user.id):
+        return
+
+    if setup_state["step"] != "number_input":
+        return
+
+    if chat.id != setup_state["chat_id"]:
+        return
+
+    if not message.text:
+        return
+
+    raw = message.text.strip()
+
+    if not raw.lstrip("-").isdigit():
+
+        await message.reply_text(
+            "⚠️ Это не похоже на число. "
+            "Пришли число ещё раз."
+        )
+
+        return
+
+    setup_state["number"] = int(raw)
+    setup_state["step"] = "photo"
+
+    await message.reply_text(
+        "✅ Число сохранено.\n\n"
+        "📸 Пришли фото (по желанию).\n\n"
+        "Или отправь «-», если без фото."
+    )
+
 
 async def handle_description(
     update: Update,
@@ -534,16 +759,59 @@ async def handle_description(
 
     setup_state["description"] = description
 
-    await start_raffle(
-        context=context,
-        chat_id=setup_state["chat_id"],
-        chat_title=setup_state["chat_title"],
-        photo=setup_state["photo"],
-        description=description,
-        admin_message=message,
-    )
+    if setup_state["type"] == "number":
+
+        await start_guess_game(
+            context=context,
+            chat_id=setup_state["chat_id"],
+            chat_title=setup_state["chat_title"],
+            photo=setup_state["photo"],
+            description=description,
+            number=setup_state["number"],
+            admin_message=message,
+        )
+
+    else:
+
+        await start_raffle(
+            context=context,
+            chat_id=setup_state["chat_id"],
+            chat_title=setup_state["chat_title"],
+            photo=setup_state["photo"],
+            description=description,
+            admin_message=message,
+        )
 
     reset_setup()
+
+
+# =========================================================
+# ДИСПЕТЧЕР ТЕКСТОВЫХ СООБЩЕНИЙ АДМИНА
+# =========================================================
+#
+# В группе 0 срабатывает только один подходящий по фильтру
+# хендлер, поэтому все текстовые шаги настройки
+# (пропуск фото / число / описание) разведены здесь по
+# текущему setup_state["step"], а не отдельными хендлерами.
+
+async def handle_admin_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    step = setup_state["step"]
+
+    if step == "photo":
+        await handle_skip_photo(update, context)
+        return
+
+    if step == "number_input":
+        await handle_number_input(update, context)
+        return
+
+    if step == "description":
+        await handle_description(update, context)
+        return
 
 
 # =========================================================
@@ -635,13 +903,23 @@ async def start_raffle(
 
         # =================================================
         # ПУБЛИКУЕМ NFT
+        # (фото не обязательно)
         # =================================================
 
-        await context.bot.send_photo(
-            chat_id=real_chat_id,
-            photo=photo,
-            caption=caption,
-        )
+        if photo:
+
+            await context.bot.send_photo(
+                chat_id=real_chat_id,
+                photo=photo,
+                caption=caption,
+            )
+
+        else:
+
+            await context.bot.send_message(
+                chat_id=real_chat_id,
+                text=caption,
+            )
 
         logger.info(
             "Розыгрыш запущен: %s",
@@ -683,6 +961,129 @@ async def start_raffle(
 
         await admin_message.reply_text(
             "❌ Не удалось запустить розыгрыш.\n\n"
+            f"{str(e)}"
+        )
+
+
+# =========================================================
+# ЗАПУСК ИГРЫ "УГАДАЙ ЧИСЛО"
+# =========================================================
+
+async def start_guess_game(
+    context,
+    chat_id,
+    chat_title,
+    photo,
+    description,
+    number,
+    admin_message,
+):
+
+    if number_game["active"]:
+
+        await admin_message.reply_text(
+            "⚠️ Игра \"Угадай число\" уже идёт."
+        )
+
+        return
+
+    # =====================================================
+    # РЕЗОЛВИМ ЦЕЛЕВОЙ ЧАТ
+    # =====================================================
+
+    try:
+
+        target_chat = await context.bot.get_chat(
+            TARGET_CHAT_USERNAME
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            "Не удалось найти целевой чат"
+        )
+
+        await admin_message.reply_text(
+            "❌ Не удалось найти чат "
+            f"{TARGET_CHAT_USERNAME}.\n\n"
+            "Проверь, что бот добавлен в этот чат "
+            "как участник/админ.\n\n"
+            f"{str(e)}"
+        )
+
+        return
+
+    real_chat_id = target_chat.id
+    real_chat_title = get_chat_name(target_chat)
+
+    now = datetime.now()
+
+    # =====================================================
+    # СОХРАНЯЕМ ИГРУ
+    # =====================================================
+
+    reset_guess_game()
+
+    number_game["active"] = True
+
+    number_game["chat_id"] = real_chat_id
+    number_game["chat_title"] = real_chat_title
+
+    number_game["photo"] = photo
+    number_game["description"] = description
+
+    number_game["number"] = number
+
+    number_game["started_at"] = now
+
+    caption = description
+
+    try:
+
+        # =================================================
+        # ПУБЛИКУЕМ ПОСТ ИГРЫ
+        # (фото не обязательно)
+        # =================================================
+
+        if photo:
+
+            await context.bot.send_photo(
+                chat_id=real_chat_id,
+                photo=photo,
+                caption=caption,
+            )
+
+        else:
+
+            await context.bot.send_message(
+                chat_id=real_chat_id,
+                text=caption,
+            )
+
+        logger.info(
+            "Игра \"Угадай число\" запущена: %s",
+            real_chat_title,
+        )
+
+        # =================================================
+        # ОТВЕТ АДМИНУ
+        # =================================================
+
+        await admin_message.reply_text(
+            "✅ Игра \"Угадай число\" запущена!\n\n"
+            f"Чат — {real_chat_title}"
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            "Ошибка запуска игры \"Угадай число\""
+        )
+
+        reset_guess_game()
+
+        await admin_message.reply_text(
+            "❌ Не удалось запустить игру.\n\n"
             f"{str(e)}"
         )
 
@@ -795,6 +1196,60 @@ async def raffle_message(
         )
 
     # =====================================================
+    # УГАДАЙ ЧИСЛО
+    # =====================================================
+    #
+    # Работает независимо от NFT-розыгрыша, как и МИШКА.
+    #
+    # Редактирование сообщений сюда никогда не попадает —
+    # оно отсекается ещё в самом начале функции
+    # (update.edited_message / update.edited_channel_post).
+    # Поэтому если первая попытка была неверной,
+    # исправление её редактированием НЕ засчитывается.
+
+    if (
+        number_game["active"]
+        and not is_admin(user.id)
+        and chat.id == number_game["chat_id"]
+        and message.text
+    ):
+
+        guess = message.text.strip()
+
+        if (
+            guess.lstrip("-").isdigit()
+            and int(guess) == number_game["number"]
+        ):
+
+            number_game["active"] = False
+
+            number_game["winner_id"] = user.id
+            number_game["winner_name"] = user.full_name
+            number_game["winner_username"] = user.username
+
+            mention = get_mention(user)
+
+            text = (
+                "🎉 <b>У нас есть победитель!</b>\n\n"
+                f"{mention} первым угадал число: "
+                f"<b>{number_game['number']}</b>"
+            )
+
+            try:
+
+                await message.reply_text(
+                    text,
+                    parse_mode="HTML",
+                )
+
+            except Exception:
+
+                logger.exception(
+                    "Не удалось отправить сообщение "
+                    "о победителе \"Угадай число\""
+                )
+
+    # =====================================================
     # NFT-РОЗЫГРЫШ
     # =====================================================
 
@@ -850,6 +1305,8 @@ async def raffle_message(
 
     mention = get_mention(user)
 
+    # =====================================================
+    # (ниже — оригинальный код сообщения о лидере)
     # =====================================================
     # КОРРЕКТНОЕ ОТОБРАЖЕНИЕ МИНУТ
     # =====================================================
@@ -1146,7 +1603,7 @@ def main():
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            handle_description,
+            handle_admin_text,
         ),
         group=0,
     )
