@@ -53,6 +53,81 @@ MISHKA_FROM = "@xxiwk"
 
 
 # =========================================================
+# РЕДКИЕ МИШКИ (ДЖЕКПОТ)
+# =========================================================
+
+# Шанс каждой редкой мишки — независимо от обычной,
+# значительно меньше её. Обычная мишка при этом
+# не меняется.
+RARE_MISHKA_CHANCE = 0.00005
+
+# Кто выдаёт редкие мишки
+RARE_MISHKA_FROM = "@bogkm"
+
+# Эмодзи для джекпот-сообщения (💥) и галочки (✅)
+JACKPOT_EMOJI = (
+    '<tg-emoji emoji-id="5276032951342088188">'
+    '💥'
+    '</tg-emoji>'
+)
+
+CHECK_EMOJI = (
+    '<tg-emoji emoji-id="5348095454527635884">'
+    '✅'
+    '</tg-emoji>'
+)
+
+# Список всех редких мишек: имя + кастомный эмодзи
+RARE_MISHKAS = [
+    {
+        "name": "НГ",
+        "emoji_id": "5379850840691476775",
+        "emoji_char": "🎁",
+    },
+    {
+        "name": "14 февраля",
+        "emoji_id": "5393309541620291208",
+        "emoji_char": "🎁",
+    },
+    {
+        "name": "Терр",
+        "emoji_id": "5470129614439362117",
+        "emoji_char": "🎂",
+    },
+    {
+        "name": "Пасхальная",
+        "emoji_id": "5393309541620291208",
+        "emoji_char": "🎁",
+    },
+    {
+        "name": "1 мая",
+        "emoji_id": "5447213743417105726",
+        "emoji_char": "🎁",
+    },
+    {
+        "name": "Клоун",
+        "emoji_id": "5359736160224586485",
+        "emoji_char": "🎁",
+    },
+    {
+        "name": "Футбольная",
+        "emoji_id": "5397971251878732060",
+        "emoji_char": "🧸",
+    },
+    {
+        "name": "Лепрекон",
+        "emoji_id": "5317000922096769303",
+        "emoji_char": "🎁",
+    },
+    {
+        "name": "8 марта",
+        "emoji_id": "5289761157173775507",
+        "emoji_char": "🧸",
+    },
+]
+
+
+# =========================================================
 # ЛОГИ
 # =========================================================
 
@@ -1098,6 +1173,66 @@ async def try_mishka(
     user,
 ):
 
+    mention = get_mention(user)
+
+    # =====================================================
+    # РЕДКИЕ МИШКИ (ДЖЕКПОТ)
+    # =====================================================
+    #
+    # Каждая редкая мишка проверяется отдельным,
+    # независимым броском — с намного меньшим шансом,
+    # чем у обычной. Если выпала редкая — обычная в этом
+    # сообщении уже не проверяется.
+
+    for rare in RARE_MISHKAS:
+
+        if random.random() >= RARE_MISHKA_CHANCE:
+            continue
+
+        mishka_emoji = (
+            f'<tg-emoji emoji-id="{rare["emoji_id"]}">'
+            f'{rare["emoji_char"]}'
+            f'</tg-emoji>'
+        )
+
+        text = (
+            f"{JACKPOT_EMOJI} <b>ДЖЕКПОООТ!</b>\n\n"
+            f"{mishka_emoji} {mention} выиграл мишку "
+            f"«{rare['name']}» {mishka_emoji} "
+            f"от {html.escape(RARE_MISHKA_FROM)}\n"
+            f"{CHECK_EMOJI} Подарок отправлен."
+        )
+
+        try:
+
+            await message.reply_text(
+                text,
+                parse_mode="HTML",
+            )
+
+            logger.info(
+                "РЕДКАЯ МИШКА выигран: user_id=%s "
+                "username=%s name=%s",
+                user.id,
+                user.username,
+                rare["name"],
+            )
+
+            return True
+
+        except Exception:
+
+            logger.exception(
+                "Не удалось отправить сообщение "
+                "о редкой мишке"
+            )
+
+            return False
+
+    # =====================================================
+    # ОБЫЧНАЯ МИШКА
+    # =====================================================
+
     # Случайный шанс на каждое сообщение.
     #
     # random.random() возвращает число от 0.0 до 1.0.
@@ -1107,8 +1242,6 @@ async def try_mishka(
 
     if random.random() >= MISHKA_WIN_CHANCE:
         return False
-
-    mention = get_mention(user)
 
     text = (
         "🎉 <b>Поздравляю!</b>\n\n"
@@ -1648,11 +1781,19 @@ def main():
     )
 
     logger.info(
+        "Шанс каждой редкой мишки: %.5f (%.4f%%), всего типов: %s",
+        RARE_MISHKA_CHANCE,
+        RARE_MISHKA_CHANCE * 100,
+        len(RARE_MISHKAS),
+    )
+
+    logger.info(
         "================================"
     )
 
     application.run_polling(
-        allowed_updates=Update.ALL_TYPES
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
     )
 
 
