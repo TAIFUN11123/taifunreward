@@ -62,7 +62,7 @@ MISHKA_FROM = "@xxiwk"
 RARE_MISHKA_CHANCE = 0.00000
 
 # Кто выдаёт редкие мишки
-RARE_MISHKA_FROM = "@bogkm"
+RARE_MISHKA_FROM = "@Bxxyi"
 
 # Эмодзи для джекпот-сообщения (💥) и галочки (✅)
 JACKPOT_EMOJI = (
@@ -2169,7 +2169,7 @@ async def raffle_message(
 
     restart_raffle_timer(context)
 
-    mention = get_mention(user)
+    mention = get_mention(user)аа
 
     # =====================================================
     # (ниже — оригинальный код сообщения о лидере)
