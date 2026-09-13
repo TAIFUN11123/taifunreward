@@ -308,6 +308,21 @@ def is_admin(user_id: int) -> bool:
 
 
 # =========================================================
+# ПРОВЕРКА: ИДЁТ ЛИ УЖЕ КАКАЯ-ТО РАЗДАЧА
+# =========================================================
+#
+# Одновременно может идти только ОДНА раздача —
+# NFT-розыгрыш, "Угадай число" или Мини-ивент.
+
+def any_giveaway_active() -> bool:
+    return (
+        raffle["active"]
+        or number_game["active"]
+        or mini_event["active"]
+    )
+
+
+# =========================================================
 # НАЗВАНИЕ ЧАТА
 # =========================================================
 
@@ -707,8 +722,7 @@ async def start_command(
         event_status = (
             "🟢 Мини-ивент идёт\n\n"
             f"Чат — {event_chat}\n"
-            f"Диапазон — {mini_event['min_number']}–{mini_event['max_number']}\n"
-            f"⏱ Осталось — {time_left_event()} сек."
+            f"Диапазон — {mini_event['min_number']}–{mini_event['max_number']}"
         )
 
     else:
@@ -754,10 +768,11 @@ async def admin_callback(
 
     if query.data == "raffle_start":
 
-        if raffle["active"]:
+        if any_giveaway_active():
 
             await query.message.reply_text(
-                "⚠️ Розыгрыш уже идёт."
+                "⚠️ Уже идёт другая раздача. "
+                "Сначала останови её."
             )
 
             return
@@ -848,10 +863,11 @@ async def admin_callback(
 
     if query.data == "guess_start":
 
-        if number_game["active"]:
+        if any_giveaway_active():
 
             await query.message.reply_text(
-                "⚠️ Игра \"Угадай число\" уже идёт."
+                "⚠️ Уже идёт другая раздача. "
+                "Сначала останови её."
             )
 
             return
@@ -903,10 +919,11 @@ async def admin_callback(
 
     if query.data == "event_start":
 
-        if mini_event["active"]:
+        if any_giveaway_active():
 
             await query.message.reply_text(
-                "⚠️ Мини-ивент уже идёт."
+                "⚠️ Уже идёт другая раздача. "
+                "Сначала останови её."
             )
 
             return
@@ -1748,20 +1765,13 @@ async def start_mini_event(
 
     mini_event["timer_generation"] += 1
 
-    mini_event["ends_at"] = (
-        now
-        + timedelta(
-            seconds=RAFFLE_DURATION
-        )
-    )
-
     caption = (
         f'{EVENT_FIRE_EMOJI} <b>Мини-ивент "Угадай число"!</b>\n\n'
         f"{CONGRATS_EMOJI} Я загадал число от "
         f"{min_number} до {max_number}.\n"
         f"{EVENT_SPARKLE_EMOJI} Пишите свои варианты в чат!\n\n"
         f"{EVENT_LIGHTNING_EMOJI} Первый, кто угадает, "
-        f"получит NFT: {description}"
+        f"получит: {description}"
     )
 
     try:
@@ -1794,21 +1804,6 @@ async def start_mini_event(
         )
 
         # =================================================
-        # ЗАПУСКАЕМ ТАЙМЕР
-        # =================================================
-
-        generation = mini_event["timer_generation"]
-
-        mini_event["end_task"] = (
-            asyncio.create_task(
-                event_end_timer(
-                    context,
-                    generation,
-                )
-            )
-        )
-
-        # =================================================
         # ОТВЕТ АДМИНУ
         # =================================================
 
@@ -1816,7 +1811,7 @@ async def start_mini_event(
             "✅ Мини-ивент запущен!\n\n"
             f"Чат — {real_chat_title}\n"
             f"Диапазон — {min_number}–{max_number}\n"
-            "⏱ Время — 3 минуты"
+            "🏆 Побеждает тот, кто угадает первым."
         )
 
     except Exception as e:
@@ -2005,18 +2000,14 @@ async def raffle_message(
     #
     # Работает независимо от NFT-розыгрыша и "Угадай число".
     #
-    # Логика такая же, как у NFT-розыгрыша:
-    # каждый верный ответ делает игрока лидером
-    # и сбрасывает таймер на 3 минуты.
-    # Если 3 минуты никто больше не угадал —
-    # ивент завершается, лидер объявляется победителем.
+    # Первый, кто написал верное число, сразу побеждает —
+    # без удержания лидерства и без ожидания таймера.
 
     if (
         mini_event["active"]
         and not is_admin(user.id)
         and chat.id == mini_event["chat_id"]
         and message.text
-        and time_left_event() > 0
     ):
 
         guess = message.text.strip()
@@ -2024,18 +2015,17 @@ async def raffle_message(
         if (
             guess.lstrip("-").isdigit()
             and int(guess) == mini_event["number"]
-            and mini_event["leader_id"] != user.id
         ):
+
+            mini_event["active"] = False
 
             mini_event["leader_id"] = user.id
             mini_event["leader_name"] = user.full_name
             mini_event["leader_username"] = user.username
 
-            restart_event_timer(context)
-
             mention = get_mention(user)
 
-            text = (
+            win_text = (
                 f"{CONGRATS_EMOJI} <b>У нас есть победитель!</b>\n\n"
                 f"{mention} первым угадал число: "
                 f"<b>{mini_event['number']}</b>\n"
@@ -2043,10 +2033,22 @@ async def raffle_message(
                 "поставлен в очередь!"
             )
 
+            end_text = (
+                f"{EVENT_FIRE_EMOJI} <b>Ивент завершён!</b>\n\n"
+                f"{MISHKA_WIN_EMOJI} Победитель: {mention}.\n"
+                f"{GIFT_SENT_EMOJI} Приз: {mini_event['description']}"
+            )
+
             try:
 
                 await message.reply_text(
-                    text,
+                    win_text,
+                    parse_mode="HTML",
+                )
+
+                await context.bot.send_message(
+                    chat_id=mini_event["chat_id"],
+                    text=end_text,
                     parse_mode="HTML",
                 )
 
@@ -2056,6 +2058,8 @@ async def raffle_message(
                     "Не удалось отправить сообщение "
                     "о победителе мини-ивента"
                 )
+
+            reset_event()
 
     # =====================================================
     # УГАДАЙ ЧИСЛО
