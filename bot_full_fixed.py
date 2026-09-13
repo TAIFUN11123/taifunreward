@@ -35,7 +35,7 @@ ADMIN_ID = 1800089290
 # Чат, куда всегда публикуется розыгрыш
 TARGET_CHAT_USERNAME = "@Chattaifunn"
 
-# Длительность NFT-розыгрыша
+# Длительность NFT-розыгрыша / мини-ивента
 RAFFLE_DURATION = 180
 
 # Предупреждение за 30 секунд
@@ -88,14 +88,14 @@ MISHKA_WIN_EMOJI = (
     '</tg-emoji>'
 )
 
-# Перед "Поздравляю!"
+# Перед "Поздравляю!" (мишка) / перед "У нас есть победитель!" (мини-ивент)
 CONGRATS_EMOJI = (
     '<tg-emoji emoji-id="5350626912546865231">'
     '‼️'
     '</tg-emoji>'
 )
 
-# Перед "Подарок отправлен."
+# Перед "Подарок отправлен." (мишка) / перед "Приз:" (мини-ивент, финал)
 GIFT_SENT_EMOJI = (
     '<tg-emoji emoji-id="5350572310627632617">'
     '✅'
@@ -106,6 +106,31 @@ GIFT_SENT_EMOJI = (
 MESSAGE_CTA_EMOJI = (
     '<tg-emoji emoji-id="5348232622898167572">'
     '♥️'
+    '</tg-emoji>'
+)
+
+# =========================================================
+# КАСТОМНЫЕ ЭМОДЗИ ДЛЯ МИНИ-ИВЕНТА
+# =========================================================
+
+# Перед "Мини ивент!" / "Приз поставлен в очередь" / "Ивент завершён!"
+EVENT_FIRE_EMOJI = (
+    '<tg-emoji emoji-id="5348529413728256481">'
+    '🔥'
+    '</tg-emoji>'
+)
+
+# Перед "Пишите свои варианты в чат"
+EVENT_SPARKLE_EMOJI = (
+    '<tg-emoji emoji-id="5348275460901977184">'
+    '💫'
+    '</tg-emoji>'
+)
+
+# Перед "Первый кто угадает..."
+EVENT_LIGHTNING_EMOJI = (
+    '<tg-emoji emoji-id="5350618807943576963">'
+    '⚡'
     '</tg-emoji>'
 )
 
@@ -177,12 +202,14 @@ logger = logging.getLogger(__name__)
 
 setup_state = {
     "step": None,
-    "type": None,  # "nft" или "number"
+    "type": None,  # "nft" / "number" / "event"
     "chat_id": None,
     "chat_title": None,
     "photo": None,
     "description": None,
     "number": None,
+    "min_number": None,
+    "max_number": None,
 }
 
 
@@ -242,6 +269,37 @@ number_game = {
 
 
 # =========================================================
+# СОСТОЯНИЕ МИНИ-ИВЕНТА
+# (угадай число в диапазоне + лидерство/таймер как у NFT)
+# =========================================================
+
+mini_event = {
+    "active": False,
+
+    "chat_id": None,
+    "chat_title": None,
+
+    "min_number": None,
+    "max_number": None,
+    "number": None,
+
+    "photo": None,
+    "description": None,
+
+    "started_at": None,
+    "ends_at": None,
+
+    "leader_id": None,
+    "leader_name": None,
+    "leader_username": None,
+
+    "end_task": None,
+
+    "timer_generation": 0,
+}
+
+
+# =========================================================
 # ПРОВЕРКА АДМИНА
 # =========================================================
 
@@ -288,7 +346,7 @@ def get_mention(user) -> str:
 
 
 # =========================================================
-# ОСТАЛОСЬ СЕКУНД
+# ОСТАЛОСЬ СЕКУНД (NFT-РОЗЫГРЫШ)
 # =========================================================
 
 def time_left() -> int:
@@ -299,6 +357,25 @@ def time_left() -> int:
     seconds = math.ceil(
         (
             raffle["ends_at"]
+            - datetime.now()
+        ).total_seconds()
+    )
+
+    return max(0, seconds)
+
+
+# =========================================================
+# ОСТАЛОСЬ СЕКУНД (МИНИ-ИВЕНТ)
+# =========================================================
+
+def time_left_event() -> int:
+
+    if not mini_event["ends_at"]:
+        return 0
+
+    seconds = math.ceil(
+        (
+            mini_event["ends_at"]
             - datetime.now()
         ).total_seconds()
     )
@@ -319,10 +396,12 @@ def reset_setup():
     setup_state["photo"] = None
     setup_state["description"] = None
     setup_state["number"] = None
+    setup_state["min_number"] = None
+    setup_state["max_number"] = None
 
 
 # =========================================================
-# ОТМЕНА ТАЙМЕРА
+# ОТМЕНА ТАЙМЕРА (NFT-РОЗЫГРЫШ)
 # =========================================================
 
 def cancel_raffle_tasks():
@@ -341,7 +420,7 @@ def cancel_raffle_tasks():
 
 
 # =========================================================
-# СБРОС РОЗЫГРЫША
+# СБРОС РОЗЫГРЫША (NFT)
 # =========================================================
 
 def reset_raffle():
@@ -394,7 +473,51 @@ def reset_guess_game():
 
 
 # =========================================================
-# ЗАПУСК НОВОГО ТАЙМЕРА
+# ОТМЕНА ТАЙМЕРА (МИНИ-ИВЕНТ)
+# =========================================================
+
+def cancel_event_tasks():
+
+    end_task = mini_event.get("end_task")
+
+    if end_task and not end_task.done():
+        end_task.cancel()
+
+    mini_event["end_task"] = None
+
+
+# =========================================================
+# СБРОС МИНИ-ИВЕНТА
+# =========================================================
+
+def reset_event():
+
+    cancel_event_tasks()
+
+    mini_event["timer_generation"] += 1
+
+    mini_event["active"] = False
+
+    mini_event["chat_id"] = None
+    mini_event["chat_title"] = None
+
+    mini_event["min_number"] = None
+    mini_event["max_number"] = None
+    mini_event["number"] = None
+
+    mini_event["photo"] = None
+    mini_event["description"] = None
+
+    mini_event["started_at"] = None
+    mini_event["ends_at"] = None
+
+    mini_event["leader_id"] = None
+    mini_event["leader_name"] = None
+    mini_event["leader_username"] = None
+
+
+# =========================================================
+# ЗАПУСК НОВОГО ТАЙМЕРА (NFT-РОЗЫГРЫШ)
 # =========================================================
 
 def restart_raffle_timer(context):
@@ -429,6 +552,40 @@ def restart_raffle_timer(context):
     )
 
     raffle["end_task"] = task
+
+
+# =========================================================
+# ЗАПУСК НОВОГО ТАЙМЕРА (МИНИ-ИВЕНТ)
+# =========================================================
+
+def restart_event_timer(context):
+
+    old_task = mini_event.get("end_task")
+
+    if old_task and not old_task.done():
+        old_task.cancel()
+
+    mini_event["timer_generation"] += 1
+
+    generation = mini_event["timer_generation"]
+
+    now = datetime.now()
+
+    mini_event["ends_at"] = (
+        now
+        + timedelta(
+            seconds=RAFFLE_DURATION
+        )
+    )
+
+    task = asyncio.create_task(
+        event_end_timer(
+            context,
+            generation,
+        )
+    )
+
+    mini_event["end_task"] = task
 
 
 # =========================================================
@@ -488,6 +645,18 @@ async def start_command(
                 callback_data="guess_stop",
             )
         ],
+        [
+            InlineKeyboardButton(
+                "🔥 Запустить Мини-ивент",
+                callback_data="event_start",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🛑 Остановить Мини-ивент",
+                callback_data="event_stop",
+            )
+        ],
     ]
 
     if raffle["active"]:
@@ -528,10 +697,31 @@ async def start_command(
             "⚪ \"Угадай число\" не идёт"
         )
 
+    if mini_event["active"]:
+
+        event_chat = (
+            mini_event["chat_title"]
+            or str(mini_event["chat_id"])
+        )
+
+        event_status = (
+            "🟢 Мини-ивент идёт\n\n"
+            f"Чат — {event_chat}\n"
+            f"Диапазон — {mini_event['min_number']}–{mini_event['max_number']}\n"
+            f"⏱ Осталось — {time_left_event()} сек."
+        )
+
+    else:
+
+        event_status = (
+            "⚪ Мини-ивент не идёт"
+        )
+
     await message.reply_text(
         "⚙️ <b>Панель администратора</b>\n\n"
         f"{status}\n\n"
-        f"{guess_status}",
+        f"{guess_status}\n\n"
+        f"{event_status}",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             keyboard
@@ -559,7 +749,7 @@ async def admin_callback(
         return
 
     # =====================================================
-    # ЗАПУСК
+    # ЗАПУСК NFT
     # =====================================================
 
     if query.data == "raffle_start":
@@ -592,7 +782,7 @@ async def admin_callback(
         return
 
     # =====================================================
-    # СТОП
+    # СТОП NFT
     # =====================================================
 
     if query.data == "raffle_stop":
@@ -707,6 +897,61 @@ async def admin_callback(
 
         return
 
+    # =====================================================
+    # МИНИ-ИВЕНТ — ЗАПУСК
+    # =====================================================
+
+    if query.data == "event_start":
+
+        if mini_event["active"]:
+
+            await query.message.reply_text(
+                "⚠️ Мини-ивент уже идёт."
+            )
+
+            return
+
+        reset_setup()
+
+        setup_state["step"] = "event_min"
+        setup_state["type"] = "event"
+
+        setup_state["chat_id"] = chat.id
+
+        setup_state["chat_title"] = (
+            get_chat_name(chat)
+        )
+
+        await query.message.reply_text(
+            "🔢 Пришли минимальное число диапазона."
+        )
+
+        return
+
+    # =====================================================
+    # МИНИ-ИВЕНТ — СТОП
+    # =====================================================
+
+    if query.data == "event_stop":
+
+        if not mini_event["active"]:
+
+            await query.message.reply_text(
+                "⚪ Мини-ивент сейчас не идёт."
+            )
+
+            return
+
+        reset_event()
+
+        await query.message.reply_text(
+            f"{EVENT_FIRE_EMOJI} <b>Мини-ивент остановлен.</b>\n\n"
+            "Победитель не определён.",
+            parse_mode="HTML",
+        )
+
+        return
+
 
 # =========================================================
 # ПОЛУЧЕНИЕ ФОТО
@@ -743,10 +988,19 @@ async def handle_photo(
     setup_state["photo"] = photo.file_id
     setup_state["step"] = "description"
 
-    await message.reply_text(
-        "✅ Фото получено.\n\n"
-        "📝 Пришли описание."
-    )
+    if setup_state["type"] == "event":
+
+        await message.reply_text(
+            "✅ Фото получено.\n\n"
+            "📝 Пришли описание приза."
+        )
+
+    else:
+
+        await message.reply_text(
+            "✅ Фото получено.\n\n"
+            "📝 Пришли описание."
+        )
 
 
 # =========================================================
@@ -783,14 +1037,23 @@ async def handle_skip_photo(
     setup_state["photo"] = None
     setup_state["step"] = "description"
 
-    await message.reply_text(
-        "✅ Без фото.\n\n"
-        "📝 Пришли описание."
-    )
+    if setup_state["type"] == "event":
+
+        await message.reply_text(
+            "✅ Без фото.\n\n"
+            "📝 Пришли описание приза."
+        )
+
+    else:
+
+        await message.reply_text(
+            "✅ Без фото.\n\n"
+            "📝 Пришли описание."
+        )
 
 
 # =========================================================
-# ПОЛУЧЕНИЕ ОПИСАНИЯ
+# ПОЛУЧЕНИЕ ЧИСЛА (ИГРА "УГАДАЙ ЧИСЛО")
 # =========================================================
 
 async def handle_number_input(
@@ -838,6 +1101,179 @@ async def handle_number_input(
     )
 
 
+# =========================================================
+# МИНИ-ИВЕНТ: МИНИМАЛЬНОЕ ЧИСЛО ДИАПАЗОНА
+# =========================================================
+
+async def handle_event_min(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    user = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+
+    if not user or not message or not chat:
+        return
+
+    if not is_admin(user.id):
+        return
+
+    if setup_state["step"] != "event_min":
+        return
+
+    if chat.id != setup_state["chat_id"]:
+        return
+
+    if not message.text:
+        return
+
+    raw = message.text.strip()
+
+    if not raw.lstrip("-").isdigit():
+
+        await message.reply_text(
+            "⚠️ Это не похоже на число. "
+            "Пришли минимальное число ещё раз."
+        )
+
+        return
+
+    setup_state["min_number"] = int(raw)
+    setup_state["step"] = "event_max"
+
+    await message.reply_text(
+        "✅ Минимальное число сохранено.\n\n"
+        "🔢 Теперь пришли максимальное число диапазона."
+    )
+
+
+# =========================================================
+# МИНИ-ИВЕНТ: МАКСИМАЛЬНОЕ ЧИСЛО ДИАПАЗОНА
+# =========================================================
+
+async def handle_event_max(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    user = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+
+    if not user or not message or not chat:
+        return
+
+    if not is_admin(user.id):
+        return
+
+    if setup_state["step"] != "event_max":
+        return
+
+    if chat.id != setup_state["chat_id"]:
+        return
+
+    if not message.text:
+        return
+
+    raw = message.text.strip()
+
+    if not raw.lstrip("-").isdigit():
+
+        await message.reply_text(
+            "⚠️ Это не похоже на число. "
+            "Пришли максимальное число ещё раз."
+        )
+
+        return
+
+    max_number = int(raw)
+
+    if max_number <= setup_state["min_number"]:
+
+        await message.reply_text(
+            "⚠️ Максимальное число должно быть больше минимального. "
+            "Пришли максимальное число ещё раз."
+        )
+
+        return
+
+    setup_state["max_number"] = max_number
+    setup_state["step"] = "event_number"
+
+    await message.reply_text(
+        "✅ Диапазон сохранён.\n\n"
+        "🎯 Теперь пришли число, которое ты загадал "
+        f"(от {setup_state['min_number']} до {setup_state['max_number']})."
+    )
+
+
+# =========================================================
+# МИНИ-ИВЕНТ: ЗАГАДАННОЕ ЧИСЛО
+# =========================================================
+
+async def handle_event_number(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    user = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+
+    if not user or not message or not chat:
+        return
+
+    if not is_admin(user.id):
+        return
+
+    if setup_state["step"] != "event_number":
+        return
+
+    if chat.id != setup_state["chat_id"]:
+        return
+
+    if not message.text:
+        return
+
+    raw = message.text.strip()
+
+    if not raw.lstrip("-").isdigit():
+
+        await message.reply_text(
+            "⚠️ Это не похоже на число. "
+            "Пришли загаданное число ещё раз."
+        )
+
+        return
+
+    number = int(raw)
+
+    if not (setup_state["min_number"] <= number <= setup_state["max_number"]):
+
+        await message.reply_text(
+            "⚠️ Число должно быть в диапазоне "
+            f"{setup_state['min_number']}–{setup_state['max_number']}. "
+            "Пришли ещё раз."
+        )
+
+        return
+
+    setup_state["number"] = number
+    setup_state["step"] = "photo"
+
+    await message.reply_text(
+        "✅ Число сохранено.\n\n"
+        "📸 Пришли фото приза (по желанию).\n\n"
+        "Или отправь «-», если без фото."
+    )
+
+
+# =========================================================
+# ПОЛУЧЕНИЕ ОПИСАНИЯ
+# =========================================================
+
 async def handle_description(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -862,7 +1298,10 @@ async def handle_description(
     if not message.text:
         return
 
-    description = message.text
+    # text_html сохраняет кастомные эмодзи (и другое форматирование)
+    # в виде HTML-тегов <tg-emoji>, в отличие от обычного message.text,
+    # где кастомный эмодзи превращается в обычный юникод-символ.
+    description = message.text_html
 
     setup_state["description"] = description
 
@@ -875,6 +1314,20 @@ async def handle_description(
             photo=setup_state["photo"],
             description=description,
             number=setup_state["number"],
+            admin_message=message,
+        )
+
+    elif setup_state["type"] == "event":
+
+        await start_mini_event(
+            context=context,
+            chat_id=setup_state["chat_id"],
+            chat_title=setup_state["chat_title"],
+            photo=setup_state["photo"],
+            description=description,
+            number=setup_state["number"],
+            min_number=setup_state["min_number"],
+            max_number=setup_state["max_number"],
             admin_message=message,
         )
 
@@ -898,8 +1351,9 @@ async def handle_description(
 #
 # В группе 0 срабатывает только один подходящий по фильтру
 # хендлер, поэтому все текстовые шаги настройки
-# (пропуск фото / число / описание) разведены здесь по
-# текущему setup_state["step"], а не отдельными хендлерами.
+# (пропуск фото / число / описание / шаги мини-ивента)
+# разведены здесь по текущему setup_state["step"],
+# а не отдельными хендлерами.
 
 async def handle_admin_text(
     update: Update,
@@ -914,6 +1368,18 @@ async def handle_admin_text(
 
     if step == "number_input":
         await handle_number_input(update, context)
+        return
+
+    if step == "event_min":
+        await handle_event_min(update, context)
+        return
+
+    if step == "event_max":
+        await handle_event_max(update, context)
+        return
+
+    if step == "event_number":
+        await handle_event_number(update, context)
         return
 
     if step == "description":
@@ -1019,6 +1485,7 @@ async def start_raffle(
                 chat_id=real_chat_id,
                 photo=photo,
                 caption=caption,
+                parse_mode="HTML",
             )
 
         else:
@@ -1026,6 +1493,7 @@ async def start_raffle(
             await context.bot.send_message(
                 chat_id=real_chat_id,
                 text=caption,
+                parse_mode="HTML",
             )
 
         logger.info(
@@ -1158,6 +1626,7 @@ async def start_guess_game(
                 chat_id=real_chat_id,
                 photo=photo,
                 caption=caption,
+                parse_mode="HTML",
             )
 
         else:
@@ -1165,6 +1634,7 @@ async def start_guess_game(
             await context.bot.send_message(
                 chat_id=real_chat_id,
                 text=caption,
+                parse_mode="HTML",
             )
 
         logger.info(
@@ -1191,6 +1661,174 @@ async def start_guess_game(
 
         await admin_message.reply_text(
             "❌ Не удалось запустить игру.\n\n"
+            f"{str(e)}"
+        )
+
+
+# =========================================================
+# ЗАПУСК МИНИ-ИВЕНТА
+# =========================================================
+
+async def start_mini_event(
+    context,
+    chat_id,
+    chat_title,
+    photo,
+    description,
+    number,
+    min_number,
+    max_number,
+    admin_message,
+):
+
+    if mini_event["active"]:
+
+        await admin_message.reply_text(
+            "⚠️ Мини-ивент уже идёт."
+        )
+
+        return
+
+    # =====================================================
+    # РЕЗОЛВИМ ЦЕЛЕВОЙ ЧАТ
+    # =====================================================
+
+    try:
+
+        target_chat = await context.bot.get_chat(
+            TARGET_CHAT_USERNAME
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            "Не удалось найти целевой чат"
+        )
+
+        await admin_message.reply_text(
+            "❌ Не удалось найти чат "
+            f"{TARGET_CHAT_USERNAME}.\n\n"
+            "Проверь, что бот добавлен в этот чат "
+            "как участник/админ.\n\n"
+            f"{str(e)}"
+        )
+
+        return
+
+    real_chat_id = target_chat.id
+    real_chat_title = get_chat_name(target_chat)
+
+    now = datetime.now()
+
+    # =====================================================
+    # СОХРАНЯЕМ МИНИ-ИВЕНТ
+    # =====================================================
+
+    reset_event()
+
+    mini_event["active"] = True
+
+    mini_event["chat_id"] = real_chat_id
+    mini_event["chat_title"] = real_chat_title
+
+    mini_event["min_number"] = min_number
+    mini_event["max_number"] = max_number
+    mini_event["number"] = number
+
+    mini_event["photo"] = photo
+    mini_event["description"] = description
+
+    mini_event["started_at"] = now
+
+    mini_event["leader_id"] = None
+    mini_event["leader_name"] = None
+    mini_event["leader_username"] = None
+
+    cancel_event_tasks()
+
+    mini_event["timer_generation"] += 1
+
+    mini_event["ends_at"] = (
+        now
+        + timedelta(
+            seconds=RAFFLE_DURATION
+        )
+    )
+
+    caption = (
+        f'{EVENT_FIRE_EMOJI} <b>Мини-ивент "Угадай число"!</b>\n\n'
+        f"{CONGRATS_EMOJI} Я загадал число от "
+        f"{min_number} до {max_number}.\n"
+        f"{EVENT_SPARKLE_EMOJI} Пишите свои варианты в чат!\n\n"
+        f"{EVENT_LIGHTNING_EMOJI} Первый, кто угадает, "
+        f"получит NFT: {description}"
+    )
+
+    try:
+
+        # =================================================
+        # ПУБЛИКУЕМ ПОСТ МИНИ-ИВЕНТА
+        # (фото не обязательно)
+        # =================================================
+
+        if photo:
+
+            await context.bot.send_photo(
+                chat_id=real_chat_id,
+                photo=photo,
+                caption=caption,
+                parse_mode="HTML",
+            )
+
+        else:
+
+            await context.bot.send_message(
+                chat_id=real_chat_id,
+                text=caption,
+                parse_mode="HTML",
+            )
+
+        logger.info(
+            "Мини-ивент запущен: %s",
+            real_chat_title,
+        )
+
+        # =================================================
+        # ЗАПУСКАЕМ ТАЙМЕР
+        # =================================================
+
+        generation = mini_event["timer_generation"]
+
+        mini_event["end_task"] = (
+            asyncio.create_task(
+                event_end_timer(
+                    context,
+                    generation,
+                )
+            )
+        )
+
+        # =================================================
+        # ОТВЕТ АДМИНУ
+        # =================================================
+
+        await admin_message.reply_text(
+            "✅ Мини-ивент запущен!\n\n"
+            f"Чат — {real_chat_title}\n"
+            f"Диапазон — {min_number}–{max_number}\n"
+            "⏱ Время — 3 минуты"
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            "Ошибка запуска мини-ивента"
+        )
+
+        reset_event()
+
+        await admin_message.reply_text(
+            "❌ Не удалось запустить мини-ивент.\n\n"
             f"{str(e)}"
         )
 
@@ -1359,6 +1997,65 @@ async def raffle_message(
             message=message,
             user=user,
         )
+
+    # =====================================================
+    # МИНИ-ИВЕНТ
+    # (угадай число в диапазоне + держать лидерство)
+    # =====================================================
+    #
+    # Работает независимо от NFT-розыгрыша и "Угадай число".
+    #
+    # Логика такая же, как у NFT-розыгрыша:
+    # каждый верный ответ делает игрока лидером
+    # и сбрасывает таймер на 3 минуты.
+    # Если 3 минуты никто больше не угадал —
+    # ивент завершается, лидер объявляется победителем.
+
+    if (
+        mini_event["active"]
+        and not is_admin(user.id)
+        and chat.id == mini_event["chat_id"]
+        and message.text
+        and time_left_event() > 0
+    ):
+
+        guess = message.text.strip()
+
+        if (
+            guess.lstrip("-").isdigit()
+            and int(guess) == mini_event["number"]
+            and mini_event["leader_id"] != user.id
+        ):
+
+            mini_event["leader_id"] = user.id
+            mini_event["leader_name"] = user.full_name
+            mini_event["leader_username"] = user.username
+
+            restart_event_timer(context)
+
+            mention = get_mention(user)
+
+            text = (
+                f"{CONGRATS_EMOJI} <b>У нас есть победитель!</b>\n\n"
+                f"{mention} первым угадал число: "
+                f"<b>{mini_event['number']}</b>\n"
+                f"{EVENT_FIRE_EMOJI} Приз: {mini_event['description']} "
+                "поставлен в очередь!"
+            )
+
+            try:
+
+                await message.reply_text(
+                    text,
+                    parse_mode="HTML",
+                )
+
+            except Exception:
+
+                logger.exception(
+                    "Не удалось отправить сообщение "
+                    "о победителе мини-ивента"
+                )
 
     # =====================================================
     # УГАДАЙ ЧИСЛО
@@ -1692,6 +2389,167 @@ async def raffle_end_timer(
 
             if raffle["active"]:
                 raffle["active"] = False
+
+
+# =========================================================
+# ТАЙМЕР МИНИ-ИВЕНТА
+# =========================================================
+
+async def event_end_timer(
+    context,
+    generation,
+):
+
+    current_task = asyncio.current_task()
+
+    try:
+
+        # =================================================
+        # ЖДЁМ ДО 30 СЕКУНД
+        # =================================================
+
+        await asyncio.sleep(
+            max(
+                0,
+                RAFFLE_DURATION
+                - WARNING_SECONDS,
+            )
+        )
+
+        # =================================================
+        # ПРОВЕРКА АКТУАЛЬНОСТИ
+        # =================================================
+
+        if not mini_event["active"]:
+            return
+
+        if mini_event["timer_generation"] != generation:
+            return
+
+        if mini_event["end_task"] is not current_task:
+            return
+
+        # =================================================
+        # ПРЕДУПРЕЖДЕНИЕ
+        # =================================================
+
+        await context.bot.send_message(
+            chat_id=mini_event["chat_id"],
+            text=(
+                "⚠️ <b>30 секунд до конца!</b>"
+            ),
+            parse_mode="HTML",
+        )
+
+        # =================================================
+        # ПОСЛЕДНИЕ 30 СЕКУНД
+        # =================================================
+
+        await asyncio.sleep(
+            WARNING_SECONDS
+        )
+
+        # =================================================
+        # ПРОВЕРКА ПОСЛЕ ОЖИДАНИЯ
+        # =================================================
+
+        if not mini_event["active"]:
+            return
+
+        if mini_event["timer_generation"] != generation:
+            return
+
+        if mini_event["end_task"] is not current_task:
+            return
+
+        # Дополнительная проверка реального времени.
+
+        if time_left_event() > 0:
+
+            await asyncio.sleep(
+                time_left_event()
+            )
+
+            if not mini_event["active"]:
+                return
+
+            if mini_event["timer_generation"] != generation:
+                return
+
+            if mini_event["end_task"] is not current_task:
+                return
+
+        # =================================================
+        # ПОБЕДИТЕЛЬ
+        # =================================================
+
+        if mini_event["leader_id"] is None:
+
+            await context.bot.send_message(
+                chat_id=mini_event["chat_id"],
+                text=(
+                    f"{EVENT_FIRE_EMOJI} <b>Ивент завершён.</b>\n\n"
+                    "Никто не угадал число."
+                ),
+                parse_mode="HTML",
+            )
+
+        else:
+
+            if mini_event["leader_username"]:
+
+                winner = (
+                    "@"
+                    + html.escape(
+                        mini_event["leader_username"]
+                    )
+                )
+
+            else:
+
+                winner = (
+                    f'<a href="tg://user?id='
+                    f'{mini_event["leader_id"]}">'
+                    f'{html.escape(mini_event["leader_name"] or "Победитель")}'
+                    f"</a>"
+                )
+
+            await context.bot.send_message(
+                chat_id=mini_event["chat_id"],
+                text=(
+                    f"{EVENT_FIRE_EMOJI} <b>Ивент завершён!</b>\n\n"
+                    f"{MISHKA_WIN_EMOJI} Победитель: {winner}.\n"
+                    f"{GIFT_SENT_EMOJI} Приз: "
+                    f"{mini_event['description'] or ''}"
+                ),
+                parse_mode="HTML",
+            )
+
+    except asyncio.CancelledError:
+
+        logger.info(
+            "Старый таймер мини-ивента отменён: generation=%s",
+            generation,
+        )
+
+        return
+
+    except Exception:
+
+        logger.exception(
+            "Ошибка таймера мини-ивента."
+        )
+
+    finally:
+
+        if (
+            mini_event.get("end_task") is current_task
+            and mini_event.get("timer_generation") == generation
+        ):
+            mini_event["end_task"] = None
+
+            if mini_event["active"]:
+                mini_event["active"] = False
 
 
 # =========================================================
