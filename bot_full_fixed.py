@@ -49,7 +49,7 @@ WARNING_SECONDS = 30
 MISHKA_WIN_CHANCE = 0.000
 
 # Кто выдаёт мишку
-MISHKA_FROM = "@xxiwk"
+MISHKA_FROM = "Bxxyi"
 
 
 # =========================================================
