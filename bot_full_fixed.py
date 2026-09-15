@@ -2169,7 +2169,7 @@ async def raffle_message(
 
     restart_raffle_timer(context)
 
-    mention = get_mention(user)аа
+    mention = get_mention(user)
 
     # =====================================================
     # (ниже — оригинальный код сообщения о лидере)
