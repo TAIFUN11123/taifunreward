@@ -45,8 +45,8 @@ WARNING_SECONDS = 30
 # МИШКА
 # =========================================================
 
-# 0.010 = 1% шанс на каждое сообщение
-MISHKA_WIN_CHANCE = 0.005
+# Обычная мишка: примерно 1 раз в 250 сообщений
+MISHKA_WIN_CHANCE = 1 / 250
 
 # Кто выдаёт мишку
 MISHKA_FROM = "@xxwiwk"
@@ -56,10 +56,9 @@ MISHKA_FROM = "@xxwiwk"
 # РЕДКИЕ ПРИЗЫ
 # =========================================================
 
-# Шанс каждого редкого приза — независимо от обычной мишки,
-# значительно меньше её. Обычная мишка при этом
-# не меняется.
-RARE_MISHKA_CHANCE = 0.00005
+# Редкий приз (любой из списка): примерно 1 раз в 600 сообщений.
+# Какой именно приз выпадет — выбирается случайно из RARE_MISHKAS.
+RARE_MISHKA_CHANCE = 1 / 600
 
 # Кто выдаёт редкие призы
 RARE_MISHKA_FROM = "@xxwiwk"
@@ -134,26 +133,43 @@ EVENT_LIGHTNING_EMOJI = (
     '</tg-emoji>'
 )
 
-# Список редких призов: имя + кастомный эмодзи
-# jackpot=True → сообщение с надписью "ДЖЕКПОООТ!"
+# Список редких призов: имя + кастомный эмодзи.
+# У всех редких призов надпись "ДЖЕКПОООТ!"
 RARE_MISHKAS = [
     {
         "name": "Алмаз",
         "emoji_id": "5280922999241859582",
         "emoji_char": "💎",
-        "jackpot": True,
     },
     {
         "name": "Букет",
         "emoji_id": "5280774333243873175",
         "emoji_char": "💐",
-        "jackpot": False,
     },
     {
         "name": "Тортик",
         "emoji_id": "5280659198055572187",
         "emoji_char": "🎂",
-        "jackpot": False,
+    },
+    {
+        "name": "Шампанское",
+        "emoji_id": "5451905784734574339",
+        "emoji_char": "🍾",
+    },
+    {
+        "name": "Роза",
+        "emoji_id": "5280947338821524402",
+        "emoji_char": "🌹",
+    },
+    {
+        "name": "Ракета",
+        "emoji_id": "5283080528818360566",
+        "emoji_char": "🚀",
+    },
+    {
+        "name": "Кубок",
+        "emoji_id": "5280769763398671636",
+        "emoji_char": "🏆",
     },
 ]
 
@@ -1818,15 +1834,14 @@ async def try_mishka(
     # РЕДКИЕ ПРИЗЫ
     # =====================================================
     #
-    # Каждый редкий приз проверяется отдельным,
-    # независимым броском — с намного меньшим шансом,
-    # чем у обычной мишки. Если выпал редкий — обычная
-    # в этом сообщении уже не проверяется.
+    # Один общий бросок (~1 из 600 сообщений),
+    # затем случайно выбирается один из призов списка.
+    # Если выпал редкий — обычная в этом сообщении
+    # уже не проверяется.
 
-    for rare in RARE_MISHKAS:
+    if random.random() < RARE_MISHKA_CHANCE:
 
-        if random.random() >= RARE_MISHKA_CHANCE:
-            continue
+        rare = random.choice(RARE_MISHKAS)
 
         mishka_emoji = (
             f'<tg-emoji emoji-id="{rare["emoji_id"]}">'
@@ -1834,13 +1849,8 @@ async def try_mishka(
             f'</tg-emoji>'
         )
 
-        if rare["jackpot"]:
-            header = f"{JACKPOT_EMOJI} <b>ДЖЕКПОООТ!</b>"
-        else:
-            header = f"{CONGRATS_EMOJI} <b>Поздравляю!</b>"
-
         text = (
-            f"{header}\n\n"
+            f"{JACKPOT_EMOJI} <b>ДЖЕКПОООТ!</b>\n\n"
             f"{mishka_emoji} {mention} выиграл "
             f"«{rare['name']}» {mishka_emoji} "
             f"от {html.escape(RARE_MISHKA_FROM)}\n"
@@ -1881,8 +1891,8 @@ async def try_mishka(
     #
     # random.random() возвращает число от 0.0 до 1.0.
     #
-    # При MISHKA_WIN_CHANCE = 0.010:
-    # вероятность = 1%.
+    # При MISHKA_WIN_CHANCE = 1 / 250:
+    # вероятность = 0.4% (примерно раз в 250 сообщений).
 
     if random.random() >= MISHKA_WIN_CHANCE:
         return False
@@ -2648,13 +2658,13 @@ def main():
     )
 
     logger.info(
-        "Шанс мишки: %.3f (%.2f%%)",
+        "Шанс мишки: %.4f (%.2f%%)",
         MISHKA_WIN_CHANCE,
         MISHKA_WIN_CHANCE * 100,
     )
 
     logger.info(
-        "Шанс каждого редкого приза: %.5f (%.4f%%), всего типов: %s",
+        "Шанс редкого приза (любого): %.5f (%.3f%%), типов: %s",
         RARE_MISHKA_CHANCE,
         RARE_MISHKA_CHANCE * 100,
         len(RARE_MISHKAS),
