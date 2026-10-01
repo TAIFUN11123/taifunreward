@@ -41,6 +41,10 @@ RAFFLE_DURATION = 180
 # Предупреждение за 30 секунд
 WARNING_SECONDS = 30
 
+# Текст, который бот пишет под новым постом канала
+# (кастомное эмодзи ‼️ подставляется ниже в функции)
+POST_MISHKA_TEXT = "Кому мишку?"
+
 # =========================================================
 # МИШКА
 # =========================================================
@@ -1951,6 +1955,11 @@ async def raffle_message(
     if not message or not user or not chat:
         return
 
+    # Пост из канала, автоматически пересланный в чат,
+    # не считается сообщением участника
+    if message.is_automatic_forward:
+        return
+
     # Боты не участвуют
     if user.is_bot:
         return
@@ -2546,6 +2555,51 @@ async def event_end_timer(
 
 
 # =========================================================
+# НОВЫЙ ПОСТ В КАНАЛЕ -> "КОМУ МИШКУ?" В ЧАТЕ
+# =========================================================
+#
+# Когда в канале выходит пост, Telegram сам пересылает его
+# в привязанный чат (is_automatic_forward). Бот отвечает
+# на этот пост в чате.
+
+async def channel_post_announce(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    message = update.effective_message
+    chat = update.effective_chat
+
+    if not message or not chat:
+        return
+
+    if not message.is_automatic_forward:
+        return
+
+    # Только наш чат
+    if chat.username != TARGET_CHAT_USERNAME.lstrip("@"):
+        return
+
+    try:
+
+        await message.reply_text(
+            f"{CONGRATS_EMOJI} <b>{POST_MISHKA_TEXT}</b>",
+            parse_mode="HTML",
+        )
+
+        logger.info(
+            "Новый пост канала: отправлено «%s»",
+            POST_MISHKA_TEXT,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Не удалось отправить сообщение под постом канала"
+        )
+
+
+# =========================================================
 # ОШИБКИ
 # =========================================================
 
@@ -2622,6 +2676,18 @@ def main():
             handle_admin_text,
         ),
         group=0,
+    )
+
+    # =====================================================
+    # ПОСТ ИЗ КАНАЛА В ЧАТЕ
+    # =====================================================
+
+    application.add_handler(
+        MessageHandler(
+            filters.IS_AUTOMATIC_FORWARD,
+            channel_post_announce,
+        ),
+        group=5,
     )
 
     # =====================================================
