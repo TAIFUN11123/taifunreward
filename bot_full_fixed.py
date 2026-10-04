@@ -35,9 +35,6 @@ ADMIN_ID = 1800089290
 # Чат, куда всегда публикуется розыгрыш
 TARGET_CHAT_USERNAME = "@Chattaifunn"
 
-# Длительность NFT-розыгрыша / мини-ивента
-RAFFLE_DURATION = 180
-
 # Предупреждение за 30 секунд
 WARNING_SECONDS = 30
 
@@ -46,11 +43,36 @@ WARNING_SECONDS = 30
 POST_MISHKA_TEXT = "Кому мишку?"
 
 # =========================================================
-# МИШКА
+# НАСТРОЙКИ, КОТОРЫЕ МЕНЯЮТСЯ ИЗ БОТА (кнопки в /start)
 # =========================================================
 
-# Обычная мишка: примерно 1 раз в 250 сообщений
-MISHKA_WIN_CHANCE = 1 / 250
+# Значения по умолчанию. Потом меняются кнопками в админ-панели.
+settings = {
+    # Длительность NFT-розыгрыша / мини-ивента, минуты
+    "duration_min": 3,
+
+    # Мишка выпадает примерно 1 раз в N сообщений
+    "mishka_every": 250,
+
+    # Редкий приз (джекпот) выпадает примерно 1 раз в N сообщений.
+    # Какой именно приз выпадет — выбирается случайно из RARE_MISHKAS.
+    "jackpot_every": 600,
+}
+
+# Варианты, которые показываются в меню
+DURATION_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8]
+MISHKA_OPTIONS = [50, 100, 150, 250, 400, 500, 1000]
+JACKPOT_OPTIONS = [100, 300, 600, 1000, 1500, 2000, 5000]
+
+
+def get_duration() -> int:
+    """Длительность розыгрыша в секундах."""
+    return settings["duration_min"] * 60
+
+
+# =========================================================
+# МИШКА
+# =========================================================
 
 # Кто выдаёт мишку
 MISHKA_FROM = "@xxwiwk"
@@ -59,10 +81,6 @@ MISHKA_FROM = "@xxwiwk"
 # =========================================================
 # РЕДКИЕ ПРИЗЫ
 # =========================================================
-
-# Редкий приз (любой из списка): примерно 1 раз в 600 сообщений.
-# Какой именно приз выпадет — выбирается случайно из RARE_MISHKAS.
-RARE_MISHKA_CHANCE = 1 / 600
 
 # Кто выдаёт редкие призы
 RARE_MISHKA_FROM = "@xxwiwk"
@@ -542,13 +560,13 @@ def restart_raffle_timer(context):
 
     generation = raffle["timer_generation"]
 
-    # Новый дедлайн = сейчас + 3 минуты
+    # Новый дедлайн = сейчас + выбранное в настройках время
     now = datetime.now()
 
     raffle["ends_at"] = (
         now
         + timedelta(
-            seconds=RAFFLE_DURATION
+            seconds=get_duration()
         )
     )
 
@@ -583,7 +601,7 @@ def restart_event_timer(context):
     mini_event["ends_at"] = (
         now
         + timedelta(
-            seconds=RAFFLE_DURATION
+            seconds=get_duration()
         )
     )
 
@@ -666,6 +684,24 @@ async def start_command(
                 callback_data="event_stop",
             )
         ],
+        [
+            InlineKeyboardButton(
+                "⏱ Таймер розыгрыша",
+                callback_data="menu_timer",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🧸 Шанс мишки",
+                callback_data="menu_mishka",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "💥 Шанс джекпота",
+                callback_data="menu_jackpot",
+            )
+        ],
     ]
 
     if raffle["active"]:
@@ -729,7 +765,10 @@ async def start_command(
         "⚙️ <b>Панель администратора</b>\n\n"
         f"{status}\n\n"
         f"{guess_status}\n\n"
-        f"{event_status}",
+        f"{event_status}\n\n"
+        f"⏱ Таймер: {settings['duration_min']} мин.\n"
+        f"🧸 Мишка: 1 из {settings['mishka_every']} сообщений\n"
+        f"💥 Джекпот: 1 из {settings['jackpot_every']} сообщений",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             keyboard
@@ -962,6 +1001,174 @@ async def admin_callback(
         )
 
         return
+
+
+# =========================================================
+# МЕНЮ НАСТРОЕК (ТАЙМЕР / ШАНС МИШКИ / ШАНС ДЖЕКПОТА)
+# =========================================================
+
+def build_options_keyboard(
+    prefix,
+    options,
+    current,
+    suffix="",
+):
+
+    rows = []
+    row = []
+
+    for value in options:
+
+        mark = "✅ " if value == current else ""
+
+        row.append(
+            InlineKeyboardButton(
+                f"{mark}{value}{suffix}",
+                callback_data=f"{prefix}_{value}",
+            )
+        )
+
+        if len(row) == 4:
+            rows.append(row)
+            row = []
+
+    if row:
+        rows.append(row)
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "⬅️ Закрыть",
+                callback_data="menu_back",
+            )
+        ]
+    )
+
+    return InlineKeyboardMarkup(rows)
+
+
+async def settings_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        return
+
+    data = query.data
+
+    # =====================================================
+    # ОТКРЫТЬ МЕНЮ
+    # =====================================================
+
+    if data == "menu_timer":
+
+        await query.message.reply_text(
+            "⏱ Выбери время розыгрыша (минуты).\n"
+            "Применяется к новым розыгрышам и к каждому новому лидеру.",
+            reply_markup=build_options_keyboard(
+                "set_timer",
+                DURATION_OPTIONS,
+                settings["duration_min"],
+                " мин",
+            ),
+        )
+
+        return
+
+    if data == "menu_mishka":
+
+        await query.message.reply_text(
+            "🧸 Мишка выпадает 1 раз в N сообщений. Выбери N:",
+            reply_markup=build_options_keyboard(
+                "set_mishka",
+                MISHKA_OPTIONS,
+                settings["mishka_every"],
+            ),
+        )
+
+        return
+
+    if data == "menu_jackpot":
+
+        await query.message.reply_text(
+            "💥 Джекпот выпадает 1 раз в N сообщений. Выбери N:",
+            reply_markup=build_options_keyboard(
+                "set_jackpot",
+                JACKPOT_OPTIONS,
+                settings["jackpot_every"],
+            ),
+        )
+
+        return
+
+    if data == "menu_back":
+
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+        return
+
+    # =====================================================
+    # ВЫБРАТЬ ЗНАЧЕНИЕ
+    # =====================================================
+
+    try:
+
+        if data.startswith("set_timer_"):
+
+            settings["duration_min"] = int(data.split("_")[-1])
+
+            await query.message.edit_reply_markup(
+                build_options_keyboard(
+                    "set_timer",
+                    DURATION_OPTIONS,
+                    settings["duration_min"],
+                    " мин",
+                )
+            )
+
+            return
+
+        if data.startswith("set_mishka_"):
+
+            settings["mishka_every"] = int(data.split("_")[-1])
+
+            await query.message.edit_reply_markup(
+                build_options_keyboard(
+                    "set_mishka",
+                    MISHKA_OPTIONS,
+                    settings["mishka_every"],
+                )
+            )
+
+            return
+
+        if data.startswith("set_jackpot_"):
+
+            settings["jackpot_every"] = int(data.split("_")[-1])
+
+            await query.message.edit_reply_markup(
+                build_options_keyboard(
+                    "set_jackpot",
+                    JACKPOT_OPTIONS,
+                    settings["jackpot_every"],
+                )
+            )
+
+            return
+
+    except Exception:
+
+        # Например, нажали на уже выбранное значение —
+        # Telegram ругается "message is not modified". Это не ошибка.
+        logger.info("Настройки: разметка не изменилась")
 
 
 # =========================================================
@@ -1477,7 +1684,7 @@ async def start_raffle(
     raffle["ends_at"] = (
         now
         + timedelta(
-            seconds=RAFFLE_DURATION
+            seconds=get_duration()
         )
     )
 
@@ -1534,7 +1741,7 @@ async def start_raffle(
         await admin_message.reply_text(
             "✅ Розыгрыш запущен!\n\n"
             f"Чат — {real_chat_title}\n"
-            "⏱ Время — 3 минуты"
+            f"⏱ Время — {settings['duration_min']} мин."
         )
 
     except Exception as e:
@@ -1838,12 +2045,12 @@ async def try_mishka(
     # РЕДКИЕ ПРИЗЫ
     # =====================================================
     #
-    # Один общий бросок (~1 из 600 сообщений),
+    # Один общий бросок (1 из jackpot_every сообщений),
     # затем случайно выбирается один из призов списка.
     # Если выпал редкий — обычная в этом сообщении
     # уже не проверяется.
 
-    if random.random() < RARE_MISHKA_CHANCE:
+    if random.random() < 1 / settings["jackpot_every"]:
 
         rare = random.choice(RARE_MISHKAS)
 
@@ -1895,10 +2102,10 @@ async def try_mishka(
     #
     # random.random() возвращает число от 0.0 до 1.0.
     #
-    # При MISHKA_WIN_CHANCE = 1 / 250:
-    # вероятность = 0.4% (примерно раз в 250 сообщений).
+    # Вероятность = 1 / mishka_every
+    # (например, 1 / 250 = 0.4%, примерно раз в 250 сообщений).
 
-    if random.random() >= MISHKA_WIN_CHANCE:
+    if random.random() >= 1 / settings["mishka_every"]:
         return False
 
     text = (
@@ -2158,10 +2365,11 @@ async def raffle_message(
     #
     # ВАЖНО:
     #
-    # Каждый новый лидер получает новые 3 минуты.
+    # Каждый новый лидер получает новое время
+    # (из настроек, по умолчанию 3 минуты).
     #
     # Старый timer отменяется.
-    # ends_at становится NOW + 180 секунд.
+    # ends_at становится NOW + get_duration().
     # Создаётся новый timer.
     #
 
@@ -2169,8 +2377,6 @@ async def raffle_message(
 
     mention = get_mention(user)
 
-    # =====================================================
-    # (ниже — оригинальный код сообщения о лидере)
     # =====================================================
     # КОРРЕКТНОЕ ОТОБРАЖЕНИЕ МИНУТ
     # =====================================================
@@ -2245,7 +2451,7 @@ async def raffle_end_timer(
         await asyncio.sleep(
             max(
                 0,
-                RAFFLE_DURATION
+                get_duration()
                 - WARNING_SECONDS,
             )
         )
@@ -2413,7 +2619,7 @@ async def event_end_timer(
         await asyncio.sleep(
             max(
                 0,
-                RAFFLE_DURATION
+                get_duration()
                 - WARNING_SECONDS,
             )
         )
@@ -2645,12 +2851,25 @@ def main():
     )
 
     # =====================================================
-    # КНОПКИ
+    # КНОПКИ НАСТРОЕК (таймер / шанс мишки / шанс джекпота)
+    # Должны стоять ПЕРЕД admin_callback.
+    # =====================================================
+
+    application.add_handler(
+        CallbackQueryHandler(
+            settings_callback,
+            pattern=r"^(menu_|set_)",
+        )
+    )
+
+    # =====================================================
+    # КНОПКИ АДМИНА (запуск / остановка раздач)
     # =====================================================
 
     application.add_handler(
         CallbackQueryHandler(
             admin_callback,
+            pattern=r"^(raffle_|guess_|event_)",
         )
     )
 
@@ -2724,15 +2943,18 @@ def main():
     )
 
     logger.info(
-        "Шанс мишки: %.4f (%.2f%%)",
-        MISHKA_WIN_CHANCE,
-        MISHKA_WIN_CHANCE * 100,
+        "Таймер: %s мин.",
+        settings["duration_min"],
     )
 
     logger.info(
-        "Шанс редкого приза (любого): %.5f (%.3f%%), типов: %s",
-        RARE_MISHKA_CHANCE,
-        RARE_MISHKA_CHANCE * 100,
+        "Мишка: 1 из %s сообщений",
+        settings["mishka_every"],
+    )
+
+    logger.info(
+        "Джекпот (любой редкий приз): 1 из %s сообщений, типов: %s",
+        settings["jackpot_every"],
         len(RARE_MISHKAS),
     )
 
