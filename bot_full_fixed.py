@@ -57,6 +57,10 @@ settings = {
     # Редкий приз (джекпот) выпадает примерно 1 раз в N сообщений.
     # Какой именно приз выпадет — выбирается случайно из RARE_MISHKAS.
     "jackpot_every": 600,
+
+    # Включены ли мишки / джекпоты (кнопки "Стоп мишек" / "Стоп джекпота")
+    "mishka_enabled": True,
+    "jackpot_enabled": True,
 }
 
 # Варианты, которые показываются в меню
@@ -616,36 +620,22 @@ def restart_event_timer(context):
 
 
 # =========================================================
-# /START
+# ПАНЕЛЬ АДМИНА (текст + кнопки)
 # =========================================================
 
-async def start_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+def build_admin_panel():
 
-    user = update.effective_user
-    chat = update.effective_chat
-    message = update.effective_message
+    mishka_btn = (
+        "🛑 Стоп мишек"
+        if settings["mishka_enabled"]
+        else "▶️ Включить мишек"
+    )
 
-    if not user or not chat or not message:
-        return
-
-    # =====================================================
-    # ОБЫЧНЫЙ ПОЛЬЗОВАТЕЛЬ
-    # =====================================================
-
-    if not is_admin(user.id):
-
-        await message.reply_text(
-            f"💬 Чат — {TARGET_CHAT_USERNAME}"
-        )
-
-        return
-
-    # =====================================================
-    # АДМИН
-    # =====================================================
+    jackpot_btn = (
+        "🛑 Стоп джекпота"
+        if settings["jackpot_enabled"]
+        else "▶️ Включить джекпот"
+    )
 
     keyboard = [
         [
@@ -694,13 +684,21 @@ async def start_command(
             InlineKeyboardButton(
                 "🧸 Шанс мишки",
                 callback_data="menu_mishka",
-            )
-        ],
-        [
+            ),
             InlineKeyboardButton(
                 "💥 Шанс джекпота",
                 callback_data="menu_jackpot",
-            )
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                mishka_btn,
+                callback_data="toggle_mishka",
+            ),
+            InlineKeyboardButton(
+                jackpot_btn,
+                callback_data="toggle_jackpot",
+            ),
         ],
     ]
 
@@ -761,18 +759,71 @@ async def start_command(
             "⚪ Мини-ивент не идёт"
         )
 
-    await message.reply_text(
+    if settings["mishka_enabled"]:
+        mishka_status = (
+            f"🧸 Мишка: 🟢 включена, 1 из {settings['mishka_every']} сообщений"
+        )
+    else:
+        mishka_status = "🧸 Мишка: 🔴 выключена"
+
+    if settings["jackpot_enabled"]:
+        jackpot_status = (
+            f"💥 Джекпот: 🟢 включён, 1 из {settings['jackpot_every']} сообщений"
+        )
+    else:
+        jackpot_status = "💥 Джекпот: 🔴 выключен"
+
+    text = (
         "⚙️ <b>Панель администратора</b>\n\n"
         f"{status}\n\n"
         f"{guess_status}\n\n"
         f"{event_status}\n\n"
         f"⏱ Таймер: {settings['duration_min']} мин.\n"
-        f"🧸 Мишка: 1 из {settings['mishka_every']} сообщений\n"
-        f"💥 Джекпот: 1 из {settings['jackpot_every']} сообщений",
+        f"{mishka_status}\n"
+        f"{jackpot_status}"
+    )
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+# =========================================================
+# /START
+# =========================================================
+
+async def start_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    user = update.effective_user
+    chat = update.effective_chat
+    message = update.effective_message
+
+    if not user or not chat or not message:
+        return
+
+    # =====================================================
+    # ОБЫЧНЫЙ ПОЛЬЗОВАТЕЛЬ
+    # =====================================================
+
+    if not is_admin(user.id):
+
+        await message.reply_text(
+            f"💬 Чат — {TARGET_CHAT_USERNAME}"
+        )
+
+        return
+
+    # =====================================================
+    # АДМИН
+    # =====================================================
+
+    text, markup = build_admin_panel()
+
+    await message.reply_text(
+        text,
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(
-            keyboard
-        ),
+        reply_markup=markup,
     )
 
 
@@ -1060,6 +1111,35 @@ async def settings_callback(
         return
 
     data = query.data
+
+    # =====================================================
+    # ВКЛ / ВЫКЛ МИШЕК И ДЖЕКПОТА
+    # =====================================================
+
+    if data in ("toggle_mishka", "toggle_jackpot"):
+
+        key = (
+            "mishka_enabled"
+            if data == "toggle_mishka"
+            else "jackpot_enabled"
+        )
+
+        settings[key] = not settings[key]
+
+        text, markup = build_admin_panel()
+
+        try:
+            await query.message.edit_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
+        except Exception:
+            logger.exception(
+                "Не удалось обновить панель админа"
+            )
+
+        return
 
     # =====================================================
     # ОТКРЫТЬ МЕНЮ
@@ -2039,6 +2119,13 @@ async def try_mishka(
     user,
 ):
 
+    # Если и мишки, и джекпот выключены — ничего не делаем
+    if (
+        not settings["mishka_enabled"]
+        and not settings["jackpot_enabled"]
+    ):
+        return False
+
     mention = get_mention(user)
 
     # =====================================================
@@ -2050,7 +2137,10 @@ async def try_mishka(
     # Если выпал редкий — обычная в этом сообщении
     # уже не проверяется.
 
-    if random.random() < 1 / settings["jackpot_every"]:
+    if (
+        settings["jackpot_enabled"]
+        and random.random() < 1 / settings["jackpot_every"]
+    ):
 
         rare = random.choice(RARE_MISHKAS)
 
@@ -2104,6 +2194,9 @@ async def try_mishka(
     #
     # Вероятность = 1 / mishka_every
     # (например, 1 / 250 = 0.4%, примерно раз в 250 сообщений).
+
+    if not settings["mishka_enabled"]:
+        return False
 
     if random.random() >= 1 / settings["mishka_every"]:
         return False
@@ -2858,7 +2951,7 @@ def main():
     application.add_handler(
         CallbackQueryHandler(
             settings_callback,
-            pattern=r"^(menu_|set_)",
+            pattern=r"^(menu_|set_|toggle_)",
         )
     )
 
@@ -2948,12 +3041,14 @@ def main():
     )
 
     logger.info(
-        "Мишка: 1 из %s сообщений",
+        "Мишка: %s, 1 из %s сообщений",
+        "вкл" if settings["mishka_enabled"] else "выкл",
         settings["mishka_every"],
     )
 
     logger.info(
-        "Джекпот (любой редкий приз): 1 из %s сообщений, типов: %s",
+        "Джекпот (любой редкий приз): %s, 1 из %s сообщений, типов: %s",
+        "вкл" if settings["jackpot_enabled"] else "выкл",
         settings["jackpot_every"],
         len(RARE_MISHKAS),
     )
